@@ -1,26 +1,20 @@
 # Workflow that runs lint on the frontend and python code
 name: Lint
 
-# The jobs in this workflow are required, so they must run at all times
-# Always run on "main"
-# Always run on PRs
 on:
   push:
     branches:
       - main
   pull_request:
 
-# If triggered by a PR, it will be in the same group. However, each commit on main will be in its own unique group
 concurrency:
   group: ${{ github.workflow }}-${{ (github.head_ref && github.ref) || github.run_id }}
   cancel-in-progress: true
 
 permissions:
   contents: read
-  pull-requests: write
 
 jobs:
-  # Run lint on the frontend code
   lint-frontend:
     name: Lint frontend
     runs-on: ubuntu-22.04
@@ -38,50 +32,26 @@ jobs:
       - name: Lint, TypeScript compilation, and translation checks
         working-directory: ./frontend
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           set -o pipefail
 
-          report_failure() {
+          run_check() {
             name="$1"
-            log_file="$2"
-            echo "${name} failed. Last 180 log lines:"
-            tail -n 180 "$log_file"
-
-            if [ "${{ github.event_name }}" = "pull_request" ]; then
-              {
-                echo '<!-- frontend-lint-diagnostic -->'
-                echo "### Frontend ${name} failure"
-                echo
-                echo '```text'
-                tail -n 120 "$log_file"
-                echo '```'
-              } > /tmp/frontend-lint-comment.md
-              gh api --method PATCH \
-                "repos/${GITHUB_REPOSITORY}/issues/comments/5020143305" \
-                -f body="$(cat /tmp/frontend-lint-comment.md)"
+            shift
+            log_file="${name}.log"
+            if ! "$@" >"$log_file" 2>&1; then
+              echo "${name} failed. Last 180 log lines:"
+              tail -n 180 "$log_file"
+              exit 1
             fi
-            exit 1
+            echo "${name} passed."
+            tail -n 20 "$log_file"
           }
 
-          if ! npm run lint >lint.log 2>&1; then
-            report_failure lint lint.log
-          fi
-          echo 'lint passed.'
+          run_check lint npm run lint
+          run_check typescript bash -c 'npm run make-i18n && npx tsc'
+          run_check translations npm run check-translation-completeness
 
-          if ! bash -c 'npm run make-i18n && npx tsc' >typescript.log 2>&1; then
-            report_failure typescript typescript.log
-          fi
-          echo 'typescript passed.'
-
-          if ! npm run check-translation-completeness >translations.log 2>&1; then
-            report_failure translations translations.log
-          fi
-          echo 'translations passed.'
-
-  # Run lint on the python code
   lint-python:
     name: Lint python
     runs-on: ubuntu-22.04
