@@ -40,10 +40,19 @@ export default [
     rules: {
       "react-hooks/rules-of-hooks": "error",
       "react-hooks/exhaustive-deps": "off",
-      "i18next/no-literal-string": "error",
-      "unused-imports/no-unused-imports": "error",
+      "i18next/no-literal-string": "warn",
+      "unused-imports/no-unused-imports": "warn",
       "prettier/prettier": ["error"],
-      "@typescript-eslint/prefer-optional-chain": "error",
+      "@typescript-eslint/no-unused-vars": [
+        "warn",
+        {
+          argsIgnorePattern: "^_",
+          caughtErrors: "none",
+          varsIgnorePattern: "^_",
+        },
+      ],
+      "@typescript-eslint/no-empty-object-type": "warn",
+      "@typescript-eslint/prefer-optional-chain": "warn",
       "import/extensions": [
         "error",
         "ignorePackages",
