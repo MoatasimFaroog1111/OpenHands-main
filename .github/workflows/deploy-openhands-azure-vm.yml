@@ -106,4 +106,5 @@ jobs:
             exit 1
 
       - name: Deployment URL
-        run: echo "OpenHands URL: http://${{ secrets.VM_HOST }}:3000"
+        run: |
+          echo "OpenHands URL: http://${{ secrets.VM_HOST }}:3000"
