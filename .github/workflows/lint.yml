@@ -59,7 +59,9 @@ jobs:
                 tail -n 120 "$log_file"
                 echo '```'
               } > /tmp/frontend-lint-comment.md
-              gh pr comment "$PR_NUMBER" --body-file /tmp/frontend-lint-comment.md
+              gh api --method PATCH \
+                "repos/${GITHUB_REPOSITORY}/issues/comments/5020143305" \
+                -f body="$(cat /tmp/frontend-lint-comment.md)"
             fi
             exit 1
           }
