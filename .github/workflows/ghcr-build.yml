@@ -1,70 +1,56 @@
-# Workflow that builds and pushes the OpenHands app and enterprise Docker images to ghcr.io.
-# Per-image build logic lives in .github/workflows/_build-image.yml.
+# Build the application image on every PR and publish it from main.
+# This fork must not push to the upstream OpenHands GHCR namespace.
 name: Docker
 
 on:
   push:
     branches:
       - main
-      - "saas-rel-*"
-      - "oss-rel-*"
   pull_request:
   workflow_dispatch:
-    inputs:
-      reason:
-        description: "Reason for manual trigger"
-        required: true
-        default: ""
 
-# PR events share a group so pushes supersede each other; each commit on a release branch gets its own group.
 concurrency:
-  group: ${{ github.workflow }}-${{ (github.head_ref && github.ref) || github.run_id }}
+  group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+  packages: write
+
+env:
+  IMAGE_NAME: ghcr.io/${{ github.repository_owner }}/openhands-main
+
 jobs:
-  build_app:
-    name: App
-    if: github.event.pull_request.head.repo.fork != true
-    uses: ./.github/workflows/_build-image.yml
-    with:
-      image: ghcr.io/openhands/openhands
-      dockerfile: containers/app/Dockerfile
-
-  build_enterprise:
-    name: Enterprise
-    if: github.event.pull_request.head.repo.fork != true
-    needs: build_app
-    uses: ./.github/workflows/_build-image.yml
-    with:
-      image: ghcr.io/openhands/enterprise-server
-      dockerfile: enterprise/Dockerfile
-      extra-build-args: OPENHANDS_VERSION=sha-${{ github.event.pull_request.head.sha || github.sha }}
-      provenance: true
-      sbom: true
-      buildx-driver-opts: network=host
-
-  update_pr_description:
-    name: Update PR Description
-    if: github.event_name == 'pull_request' && !github.event.pull_request.head.repo.fork && github.actor != 'dependabot[bot]'
-    needs: build_app
+  build-app:
+    name: Build OpenHands app
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Get short SHA
-        id: short_sha
-        env:
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-        run: printf 'SHORT_SHA=%s\n' "${PR_HEAD_SHA:0:7}" >> "$GITHUB_OUTPUT"
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
 
-      - name: Update PR Description
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          REPO: ${{ github.repository }}
-          SHORT_SHA: ${{ steps.short_sha.outputs.SHORT_SHA }}
-        shell: bash
-        run: |
-          echo "Updating PR description with Docker and uvx commands"
-          bash "${GITHUB_WORKSPACE}/.github/scripts/update_pr_description.sh"
+      - name: Login to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and optionally publish
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7
+        with:
+          context: .
+          file: containers/app/Dockerfile
+          platforms: linux/amd64
+          push: ${{ github.event_name == 'push' && github.ref == 'refs/heads/main' }}
+          tags: |
+            ${{ env.IMAGE_NAME }}:sha-${{ github.sha }}
+            ${{ env.IMAGE_NAME }}:latest
+          build-args: |
+            OPENHANDS_BUILD_VERSION=sha-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
