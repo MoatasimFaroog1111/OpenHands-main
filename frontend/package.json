@@ -63,7 +63,7 @@
     "lint": "npm run typecheck && eslint src --ext .ts,.tsx,.js && prettier --check src/**/*.{ts,tsx}",
     "lint:fix": "eslint src --ext .ts,.tsx,.js --fix && prettier --write src/**/*.{ts,tsx}",
     "prepare": "cd .. && husky frontend/.husky",
-    "typecheck": "react-router typegen && tsc",
+    "typecheck": "react-router typegen && npx tsc",
     "typecheck:staged": "react-router typegen && npx tsc --noEmit --skipLibCheck",
     "check-translation-completeness": "node scripts/check-translation-completeness.cjs"
   },
@@ -98,7 +98,7 @@
     "@typescript-eslint/parser": "^8.63.0",
     "@vitest/coverage-v8": "^4.1.0",
     "cross-env": "^10.1.0",
-    "eslint": "^10.7.0",
+    "eslint": "9.39.4",
     "eslint-config-airbnb": "^19.0.4",
     "eslint-config-airbnb-typescript": "^18.0.0",
     "eslint-config-prettier": "^10.1.8",
