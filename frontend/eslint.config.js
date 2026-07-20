@@ -40,12 +40,24 @@ export default [
         "ignorePackages",
         {
           "": "never",
+          js: "never",
+          jsx: "never",
           ts: "never",
           tsx: "never",
         },
       ],
     },
     settings: {
+      "import/parsers": {
+        "@typescript-eslint/parser": [".ts", ".tsx"],
+      },
+      "import/resolver": {
+        typescript: {
+          alwaysTryTypes: true,
+          project: "./tsconfig.json",
+        },
+        node: true,
+      },
       react: {
         version: "detect",
       },
@@ -55,6 +67,15 @@ export default [
         files: ["*.ts", "*.tsx"],
         excludedFiles: ["src/hooks/query/query-keys.ts"],
         rules: {
+          "camelcase": "off",
+          "no-array-constructor": "off",
+          "no-dupe-class-members": "off",
+          "no-implied-eval": "off",
+          "no-loss-of-precision": "off",
+          "no-redeclare": "off",
+          "no-shadow": "off",
+          "no-unused-vars": "off",
+          "no-use-before-define": "off",
           "no-param-reassign": [
             "error",
             {
