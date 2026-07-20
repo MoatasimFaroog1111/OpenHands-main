@@ -32,11 +32,27 @@ jobs:
         working-directory: ./frontend
         run: npm ci
       - name: Lint, TypeScript compilation, and translation checks
+        working-directory: ./frontend
+        shell: bash
         run: |
-          cd frontend
-          npm run lint
-          npm run make-i18n && npx tsc
-          npm run check-translation-completeness
+          set -o pipefail
+
+          run_check() {
+            name="$1"
+            shift
+            log_file="${name}.log"
+            if ! "$@" >"$log_file" 2>&1; then
+              echo "${name} failed. Last 180 log lines:"
+              tail -n 180 "$log_file"
+              exit 1
+            fi
+            echo "${name} passed."
+            tail -n 20 "$log_file"
+          }
+
+          run_check lint npm run lint
+          run_check typescript bash -c 'npm run make-i18n && npx tsc'
+          run_check translations npm run check-translation-completeness
 
   # Run lint on the python code
   lint-python:
