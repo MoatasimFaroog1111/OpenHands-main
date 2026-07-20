@@ -22,7 +22,6 @@ export default [
     },
     extends: [
       "airbnb",
-      "airbnb-typescript",
       "prettier",
       "plugin:@typescript-eslint/eslint-recommended",
       "plugin:@typescript-eslint/recommended",
