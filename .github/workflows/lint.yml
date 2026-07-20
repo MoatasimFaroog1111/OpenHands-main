@@ -1,22 +1,20 @@
 # Workflow that runs lint on the frontend and python code
 name: Lint
 
-# The jobs in this workflow are required, so they must run at all times
-# Always run on "main"
-# Always run on PRs
 on:
   push:
     branches:
       - main
   pull_request:
 
-# If triggered by a PR, it will be in the same group. However, each commit on main will be in its own unique group
 concurrency:
   group: ${{ github.workflow }}-${{ (github.head_ref && github.ref) || github.run_id }}
   cancel-in-progress: true
 
+permissions:
+  contents: read
+
 jobs:
-  # Run lint on the frontend code
   lint-frontend:
     name: Lint frontend
     runs-on: ubuntu-22.04
@@ -32,13 +30,28 @@ jobs:
         working-directory: ./frontend
         run: npm ci
       - name: Lint, TypeScript compilation, and translation checks
+        working-directory: ./frontend
+        shell: bash
         run: |
-          cd frontend
-          npm run lint
-          npm run make-i18n && npx tsc
-          npm run check-translation-completeness
+          set -o pipefail
 
-  # Run lint on the python code
+          run_check() {
+            name="$1"
+            shift
+            log_file="${name}.log"
+            if ! "$@" >"$log_file" 2>&1; then
+              echo "${name} failed. Last 180 log lines:"
+              tail -n 180 "$log_file"
+              exit 1
+            fi
+            echo "${name} passed."
+            tail -n 20 "$log_file"
+          }
+
+          run_check lint npm run lint
+          run_check typescript bash -c 'npm run make-i18n && npx tsc'
+          run_check translations npm run check-translation-completeness
+
   lint-python:
     name: Lint python
     runs-on: ubuntu-22.04

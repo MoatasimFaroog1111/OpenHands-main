@@ -8,7 +8,7 @@ updates:
       default-days: 7
     open-pull-requests-limit: 5
     groups:
-      # put packages in their own group if they have a history of breaking the build or needing to be reverted
+      # Keep known related Python packages together.
       pre-commit:
         patterns:
           - "pre-commit"
@@ -35,18 +35,29 @@ updates:
       default-days: 7
     open-pull-requests-limit: 5
     groups:
-      docusaurus:
-        patterns:
-          - "*docusaurus*"
+      # Avoid one high-risk PR that upgrades the entire frontend at once.
       eslint:
         patterns:
           - "*eslint*"
+      react-router:
+        patterns:
+          - "react-router"
+          - "@react-router/*"
+      test-tooling:
+        patterns:
+          - "@playwright/test"
+          - "@testing-library/*"
+          - "@vitest/*"
+          - "vitest"
+          - "jsdom"
+      build-tooling:
+        patterns:
+          - "vite"
+          - "vite-*"
+          - "typescript"
+          - "@types/*"
       security-all:
         applies-to: "security-updates"
-        patterns:
-          - "*"
-      version-all:
-        applies-to: "version-updates"
         patterns:
           - "*"
 

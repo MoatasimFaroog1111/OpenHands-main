@@ -3,111 +3,108 @@ name: Deploy OpenHands to Azure VM
 on:
   workflow_dispatch:
 
+concurrency:
+  group: deploy-openhands-azure-vm
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
 jobs:
   deploy:
-    name: Deploy to Azure VM
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+    name: Build, publish, and deploy to Azure VM
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
 
     env:
-      VM_HOST: ${{ secrets.VM_HOST }}
-      VM_USER: ${{ secrets.VM_USER }}
-      ACR_SERVER: ${{ secrets.ACR_SERVER }}
-      ACR_USERNAME: ${{ secrets.ACR_USERNAME }}
-      ACR_PASSWORD: ${{ secrets.ACR_PASSWORD }}
-      IMAGE_NAME: ${{ secrets.IMAGE_NAME }}
-      IMAGE_TAG: ${{ secrets.IMAGE_TAG }}
+      IMAGE: ${{ secrets.ACR_SERVER }}/${{ secrets.IMAGE_NAME }}:${{ secrets.IMAGE_TAG }}
 
     steps:
-      - name: Validate required secrets
-        shell: bash
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
+
+      - name: Login to Azure Container Registry
+        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
+        with:
+          registry: ${{ secrets.ACR_SERVER }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Build and push OpenHands image
+        uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7
+        with:
+          context: .
+          file: containers/app/Dockerfile
+          platforms: linux/amd64
+          push: true
+          tags: ${{ env.IMAGE }}
+          build-args: OPENHANDS_BUILD_VERSION=azure-${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+          provenance: false
+
+      - name: Export the published image
         run: |
-          set -euo pipefail
-          missing=0
-          for name in VM_HOST VM_USER ACR_SERVER ACR_USERNAME ACR_PASSWORD IMAGE_NAME IMAGE_TAG; do
-            if [ -z "${!name:-}" ]; then
-              echo "Missing required secret: $name"
-              missing=1
-            fi
-          done
-          if [ -z "${{ secrets.VM_SSH_PRIVATE_KEY }}" ]; then
-            echo "Missing required secret: VM_SSH_PRIVATE_KEY"
-            missing=1
-          fi
-          if [ "$missing" -ne 0 ]; then
+          docker pull "$IMAGE"
+          docker save "$IMAGE" -o openhands-image.tar
+
+      - name: Upload image to Azure VM
+        uses: appleboy/scp-action@v1
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USER }}
+          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          source: openhands-image.tar
+          target: /tmp/openhands-deploy
+
+      - name: Start and verify OpenHands
+        uses: appleboy/ssh-action@v1
+        env:
+          IMAGE: ${{ env.IMAGE }}
+          VM_HOST: ${{ secrets.VM_HOST }}
+        with:
+          host: ${{ secrets.VM_HOST }}
+          username: ${{ secrets.VM_USER }}
+          key: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+          envs: IMAGE,VM_HOST
+          script_stop: true
+          script: |
+            set -euo pipefail
+            command -v docker >/dev/null
+            sudo docker load -i /tmp/openhands-deploy/openhands-image.tar
+            sudo mkdir -p /opt/openhands/home /opt/openhands/workspace
+            sudo chown -R 42420:42420 /opt/openhands/home /opt/openhands/workspace
+            sudo chmod -R 770 /opt/openhands/home /opt/openhands/workspace
+            sudo docker rm -f openhands 2>/dev/null || true
+            sudo docker run -d \
+              --restart unless-stopped \
+              --name openhands \
+              -p 3000:3000 \
+              -e PORT=3000 \
+              -e OH_WEB_URL="http://$VM_HOST:3000" \
+              -e WEB_HOST="$VM_HOST:3000" \
+              -e OH_PERSISTENCE_DIR=/.openhands \
+              -e RUNTIME=docker \
+              -e WORKSPACE_MOUNT_PATH=/opt/openhands/workspace \
+              -v /var/run/docker.sock:/var/run/docker.sock \
+              -v /opt/openhands/home:/.openhands \
+              -v /opt/openhands/workspace:/opt/workspace_base \
+              --add-host host.docker.internal:host-gateway \
+              "$IMAGE"
+            for attempt in $(seq 1 18); do
+              if curl -fsS http://127.0.0.1:3000/ >/dev/null; then
+                sudo docker ps --filter name=openhands
+                rm -f /tmp/openhands-deploy/openhands-image.tar
+                exit 0
+              fi
+              sleep 5
+            done
+            sudo docker logs --tail 150 openhands
             exit 1
-          fi
-          echo "All required secrets are present."
 
-      - name: Configure SSH key
-        shell: bash
+      - name: Deployment URL
         run: |
-          set -euo pipefail
-          mkdir -p ~/.ssh
-          printf '%s\n' "${{ secrets.VM_SSH_PRIVATE_KEY }}" > ~/.ssh/id_rsa
-          chmod 600 ~/.ssh/id_rsa
-          ssh-keyscan -H "$VM_HOST" >> ~/.ssh/known_hosts
-
-      - name: Deploy OpenHands container on Azure VM
-        shell: bash
-        run: |
-          set -euo pipefail
-
-          ACR_PASSWORD_B64="$(printf '%s' "$ACR_PASSWORD" | base64 -w 0)"
-
-          ssh -i ~/.ssh/id_rsa \
-            -o BatchMode=yes \
-            -o StrictHostKeyChecking=yes \
-            "$VM_USER@$VM_HOST" \
-            "ACR_SERVER='$ACR_SERVER' ACR_USERNAME='$ACR_USERNAME' ACR_PASSWORD_B64='$ACR_PASSWORD_B64' IMAGE_NAME='$IMAGE_NAME' IMAGE_TAG='$IMAGE_TAG' VM_HOST='$VM_HOST' bash -s" <<'REMOTE'
-          set -euo pipefail
-
-          ACR_PASSWORD="$(printf '%s' "$ACR_PASSWORD_B64" | base64 -d)"
-          IMAGE="$ACR_SERVER/$IMAGE_NAME:$IMAGE_TAG"
-          WEB_URL="http://$VM_HOST:3000"
-
-          echo "Logging in to Azure Container Registry..."
-          printf '%s' "$ACR_PASSWORD" | sudo docker login "$ACR_SERVER" -u "$ACR_USERNAME" --password-stdin >/dev/null
-
-          echo "Preparing OpenHands persistent folders..."
-          sudo mkdir -p /opt/openhands/home /opt/openhands/workspace/conversations /opt/openhands/workspace/bash_events
-          sudo chmod -R 777 /opt/openhands/home /opt/openhands/workspace
-
-          echo "Pulling image: $IMAGE"
-          sudo docker pull "$IMAGE"
-
-          echo "Removing old OpenHands container if it exists..."
-          sudo docker rm -f openhands || true
-
-          echo "Starting OpenHands on $WEB_URL"
-          sudo docker run -d \
-            --restart unless-stopped \
-            --name openhands \
-            -p 3000:3000 \
-            -e OH_WEB_URL="$WEB_URL" \
-            -e OH_PERSISTENCE_DIR=/.openhands \
-            -e RUNTIME=docker \
-            -e SANDBOX_RUNTIME_BINDING_ADDRESS=0.0.0.0 \
-            -e SANDBOX_USE_HOST_NETWORK=true \
-            -e WORKSPACE_BASE=/opt/openhands/workspace \
-            -e SANDBOX_VOLUMES='/opt/openhands/workspace:/workspace:rw' \
-            -v /var/run/docker.sock:/var/run/docker.sock \
-            -v /opt/openhands/home:/.openhands \
-            -v /opt/openhands/workspace:/opt/openhands/workspace \
-            --add-host host.docker.internal:host-gateway \
-            "$IMAGE"
-
-          echo "Waiting for OpenHands to start..."
-          sleep 15
-
-          echo "Current OpenHands container:"
-          sudo docker ps --filter name=openhands
-
-          echo "Recent OpenHands logs:"
-          sudo docker logs --tail 80 openhands
-          REMOTE
-
-      - name: Show URL
-        shell: bash
-        run: |
-          echo "OpenHands URL: http://$VM_HOST:3000"
+          echo "OpenHands URL: http://${{ secrets.VM_HOST }}:3000"
