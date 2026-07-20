@@ -13,6 +13,7 @@ frontend/node_modules
 
 # Hidden files and directories
 .*
+!frontend/.npmrc
 **/.venv
 __pycache__
 
