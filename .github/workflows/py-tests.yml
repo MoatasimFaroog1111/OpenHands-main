@@ -56,13 +56,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -o pipefail
-          if ! PYTHONPATH=".:$PYTHONPATH" poetry run pytest --forked -n 1 -q --tb=short --maxfail=20 ./tests/unit >pytest-diagnostic.log 2>&1; then
+          if ! PYTHONPATH=".:$PYTHONPATH" poetry run pytest --forked -n auto -q --tb=short --maxfail=20 ./tests/unit >pytest-diagnostic.log 2>&1; then
             echo 'Python unit tests failed. Diagnostic output:'
             tail -n 420 pytest-diagnostic.log
             if [ "${{ github.event_name }}" = "pull_request" ]; then
               {
                 echo '<!-- python-test-diagnostic -->'
-                echo '### Python unit test failure — serial diagnostic'
+                echo '### Python unit test failure — parallel diagnostic'
                 echo
                 echo '```text'
                 tail -n 400 pytest-diagnostic.log
@@ -74,7 +74,7 @@ jobs:
             fi
             exit 1
           fi
-      - name: Store coverage file
+      - name: Store diagnostic log
         if: always()
         uses: actions/upload-artifact@v7
         with:
@@ -116,4 +116,4 @@ jobs:
     runs-on: ubuntu-latest
     needs: [test-on-linux, test-enterprise]
     steps:
-      - run: echo "Coverage is temporarily disabled during serial test diagnosis."
+      - run: echo "Coverage is temporarily disabled during parallel test diagnosis."
