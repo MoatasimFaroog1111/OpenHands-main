@@ -43,7 +43,7 @@
     "socket.io-client": "^4.8.3",
     "tailwind-merge": "^3.4.0",
     "tailwind-scrollbar": "^4.0.2",
-    "vite": "^7.3.2",
+    "vite": "^8.1.4",
     "zustand": "^5.0.11"
   },
   "scripts": {
@@ -89,7 +89,7 @@
     "@testing-library/jest-dom": "^6.9.1",
     "@testing-library/react": "^16.3.2",
     "@testing-library/user-event": "^14.6.1",
-    "@types/node": "^25.2.2",
+    "@types/node": "^26.1.1",
     "@types/react": "^19.2.13",
     "@types/react-dom": "^19.2.3",
     "@types/react-syntax-highlighter": "^15.5.13",
@@ -114,8 +114,8 @@
     "msw": "^2.6.6",
     "prettier": "^3.8.0",
     "tailwindcss": "^4.1.8",
-    "typescript": "^5.9.3",
-    "vite-plugin-svgr": "^4.5.0",
+    "typescript": "^7.0.2",
+    "vite-plugin-svgr": "^5.2.0",
     "vite-tsconfig-paths": "^6.1.0",
     "vitest": "^4.1.0"
   },
