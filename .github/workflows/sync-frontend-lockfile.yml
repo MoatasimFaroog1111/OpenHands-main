@@ -1,0 +1,49 @@
+name: Sync frontend lockfile
+
+on:
+  push:
+    branches:
+      - agent/fix-ci-deployments
+    paths:
+      - frontend/package.json
+      - frontend/eslint.config.js
+      - .github/workflows/sync-frontend-lockfile.yml
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    name: Regenerate package-lock.json
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout repair branch
+        uses: actions/checkout@v6
+        with:
+          ref: agent/fix-ci-deployments
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set up Node.js 22
+        uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+
+      - name: Regenerate lockfile
+        working-directory: frontend
+        run: npm install --package-lock-only --legacy-peer-deps --ignore-scripts
+
+      - name: Commit lockfile when changed
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet -- frontend/package-lock.json; then
+            echo "package-lock.json is already current."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add frontend/package-lock.json
+          git commit -m "Sync frontend lockfile for ESLint flat config"
+          git push origin HEAD:agent/fix-ci-deployments
