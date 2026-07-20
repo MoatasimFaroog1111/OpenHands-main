@@ -53,20 +53,19 @@ jobs:
       - name: Run Unit Tests
         shell: bash
         env:
-          COVERAGE_FILE: ".coverage.${{ matrix.python_version }}"
           GH_TOKEN: ${{ github.token }}
         run: |
           set -o pipefail
-          if ! PYTHONPATH=".:$PYTHONPATH" poetry run pytest --forked -n auto -s ./tests/unit --cov=openhands --cov-branch >pytest.log 2>&1; then
-            echo 'Python unit tests failed. Last 240 log lines:'
-            tail -n 240 pytest.log
+          if ! PYTHONPATH=".:$PYTHONPATH" poetry run pytest --forked -n 1 -q --tb=short --maxfail=20 ./tests/unit >pytest-diagnostic.log 2>&1; then
+            echo 'Python unit tests failed. Diagnostic output:'
+            tail -n 420 pytest-diagnostic.log
             if [ "${{ github.event_name }}" = "pull_request" ]; then
               {
                 echo '<!-- python-test-diagnostic -->'
-                echo '### Python unit test failure'
+                echo '### Python unit test failure — serial diagnostic'
                 echo
                 echo '```text'
-                tail -n 220 pytest.log
+                tail -n 400 pytest-diagnostic.log
                 echo '```'
               } > /tmp/python-test-comment.md
               gh api --method PATCH \
@@ -76,13 +75,11 @@ jobs:
             exit 1
           fi
       - name: Store coverage file
+        if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: coverage-openhands
-          path: |
-            .coverage.${{ matrix.python_version }}
-            .coverage.runtime.${{ matrix.python_version }}
-          include-hidden-files: true
+          name: python-test-diagnostic
+          path: pytest-diagnostic.log
 
   test-enterprise:
     name: Enterprise Python Unit Tests
@@ -115,22 +112,8 @@ jobs:
 
   coverage-comment:
     name: Coverage Comment
-    if: github.event_name == 'pull_request'
+    if: false
     runs-on: ubuntu-latest
     needs: [test-on-linux, test-enterprise]
-    permissions:
-      pull-requests: write
-      contents: write
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/download-artifact@v8
-        id: download
-        with:
-          pattern: coverage-*
-          merge-multiple: true
-      - name: Coverage comment
-        id: coverage_comment
-        uses: py-cov-action/python-coverage-comment-action@53ff7553078bad69030786e486677315346c2dd2 # v3
-        with:
-          GITHUB_TOKEN: ${{ github.token }}
-          MERGE_COVERAGE_FILES: true
+      - run: echo "Coverage is temporarily disabled during serial test diagnosis."
