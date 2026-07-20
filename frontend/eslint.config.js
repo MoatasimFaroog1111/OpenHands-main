@@ -21,13 +21,15 @@ export default [
       tsconfigRootDir: dirname,
     },
     extends: [
-      "airbnb",
-      "prettier",
       "plugin:@typescript-eslint/eslint-recommended",
       "plugin:@typescript-eslint/recommended",
       "plugin:react/recommended",
       "plugin:react-hooks/recommended",
+      "plugin:jsx-a11y/recommended",
+      "plugin:import/recommended",
+      "plugin:import/typescript",
       "plugin:@tanstack/query/recommended",
+      "prettier",
     ],
     plugins: ["prettier", "unused-imports", "i18next"],
     rules: {
@@ -67,7 +69,7 @@ export default [
         files: ["*.ts", "*.tsx"],
         excludedFiles: ["src/hooks/query/query-keys.ts"],
         rules: {
-          "camelcase": "off",
+          camelcase: "off",
           "no-array-constructor": "off",
           "no-dupe-class-members": "off",
           "no-implied-eval": "off",
