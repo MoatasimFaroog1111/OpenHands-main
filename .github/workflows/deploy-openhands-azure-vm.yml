@@ -8,6 +8,7 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
+  id-token: write
   contents: read
 
 jobs:
@@ -15,23 +16,48 @@ jobs:
     name: Build, publish, and deploy to Azure VM
     runs-on: ubuntu-22.04
     timeout-minutes: 60
+    environment: production
 
     env:
-      IMAGE: ${{ secrets.ACR_SERVER }}/${{ secrets.IMAGE_NAME }}:${{ secrets.IMAGE_TAG }}
+      ACR_NAME: ${{ vars.ACR_NAME }}
+      IMAGE: ${{ vars.ACR_NAME }}.azurecr.io/openhands:${{ github.sha }}
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
 
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
+      - name: Validate deployment settings
+        env:
+          VM_HOST: ${{ secrets.VM_HOST }}
+          VM_USER: ${{ secrets.VM_USER }}
+          VM_SSH_PRIVATE_KEY: ${{ secrets.VM_SSH_PRIVATE_KEY }}
+        run: |
+          set -euo pipefail
+          test -n "${{ vars.AZURE_CLIENT_ID }}"
+          test -n "${{ vars.AZURE_TENANT_ID }}"
+          test -n "${{ vars.AZURE_SUBSCRIPTION_ID }}"
+          test -n "$ACR_NAME"
+          test -n "$VM_HOST"
+          test -n "$VM_USER"
+          test -n "$VM_SSH_PRIVATE_KEY"
+
+      - name: Login to Azure with OIDC
+        uses: azure/login@v2
+        with:
+          client-id: ${{ vars.AZURE_CLIENT_ID }}
+          tenant-id: ${{ vars.AZURE_TENANT_ID }}
+          subscription-id: ${{ vars.AZURE_SUBSCRIPTION_ID }}
+
+      - name: Verify Azure access
+        run: |
+          az account show --query "{subscription:name,tenant:tenantId}" -o table
+          az acr show --name "$ACR_NAME" --query "{name:name,loginServer:loginServer}" -o table
 
       - name: Login to Azure Container Registry
-        uses: docker/login-action@4907a6ddec9925e35a0a9e82d7399ccc52663121 # v4
-        with:
-          registry: ${{ secrets.ACR_SERVER }}
-          username: ${{ secrets.ACR_USERNAME }}
-          password: ${{ secrets.ACR_PASSWORD }}
+        run: az acr login --name "$ACR_NAME"
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
 
       - name: Build and push OpenHands image
         uses: docker/build-push-action@bcafcacb16a39f128d818304e6c9c0c18556b85f # v7
@@ -48,8 +74,10 @@ jobs:
 
       - name: Export the published image
         run: |
+          set -euo pipefail
           docker pull "$IMAGE"
           docker save "$IMAGE" -o openhands-image.tar
+          ls -lh openhands-image.tar
 
       - name: Upload image to Azure VM
         uses: appleboy/scp-action@v1
@@ -73,12 +101,24 @@ jobs:
           script_stop: true
           script: |
             set -euo pipefail
+
             command -v docker >/dev/null
+
             sudo docker load -i /tmp/openhands-deploy/openhands-image.tar
-            sudo mkdir -p /opt/openhands/home /opt/openhands/workspace
-            sudo chown -R 42420:42420 /opt/openhands/home /opt/openhands/workspace
-            sudo chmod -R 770 /opt/openhands/home /opt/openhands/workspace
+
+            sudo mkdir -p /opt/openhands/home
+            sudo mkdir -p /opt/openhands/workspace
+
+            sudo chown -R 42420:42420 \
+              /opt/openhands/home \
+              /opt/openhands/workspace
+
+            sudo chmod -R 770 \
+              /opt/openhands/home \
+              /opt/openhands/workspace
+
             sudo docker rm -f openhands 2>/dev/null || true
+
             sudo docker run -d \
               --restart unless-stopped \
               --name openhands \
@@ -94,17 +134,25 @@ jobs:
               -v /opt/openhands/workspace:/opt/workspace_base \
               --add-host host.docker.internal:host-gateway \
               "$IMAGE"
-            for attempt in $(seq 1 18); do
+
+            for attempt in $(seq 1 24); do
               if curl -fsS http://127.0.0.1:3000/ >/dev/null; then
                 sudo docker ps --filter name=openhands
                 rm -f /tmp/openhands-deploy/openhands-image.tar
                 exit 0
               fi
+
+              echo "Waiting for OpenHands... attempt $attempt"
               sleep 5
             done
-            sudo docker logs --tail 150 openhands
+
+            sudo docker logs --tail 200 openhands
             exit 1
 
       - name: Deployment URL
         run: |
           echo "OpenHands URL: http://${{ secrets.VM_HOST }}:3000"
+
+      - name: Logout from Azure
+        if: always()
+        run: az logout
