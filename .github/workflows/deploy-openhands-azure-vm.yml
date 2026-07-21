@@ -116,8 +116,27 @@ jobs:
 
             command -v docker >/dev/null
 
+            echo "Loading the new OpenHands image..."
+
             sudo docker load \
               -i /tmp/openhands-deploy/openhands-image.tar
+
+            echo "Removing old sandbox containers..."
+
+            while IFS= read -r sandbox_id; do
+              if [ -n "$sandbox_id" ]; then
+                sudo docker rm -f "$sandbox_id"
+              fi
+            done < <(
+              sudo docker ps -aq \
+                --filter "name=oh-agent-server-"
+            )
+
+            echo "Removing the previous OpenHands container..."
+
+            sudo docker rm -f openhands 2>/dev/null || true
+
+            echo "Preparing persistent directories..."
 
             sudo mkdir -p \
               /opt/openhands/home \
@@ -131,7 +150,7 @@ jobs:
               /opt/openhands/home \
               /opt/openhands/workspace
 
-            sudo docker rm -f openhands 2>/dev/null || true
+            echo "Starting OpenHands..."
 
             sudo docker run -d \
               --restart unless-stopped \
@@ -140,10 +159,12 @@ jobs:
               -e PORT=3000 \
               -e OH_WEB_URL="http://$VM_HOST:3000" \
               -e OH_PERMITTED_CORS_ORIGINS_0="http://$VM_HOST:3000" \
-              -e SANDBOX_HOST_PORT=3000 \
-              -e SANDBOX_CONTAINER_URL_PATTERN="http://$VM_HOST:{port}" \
-              -e SANDBOX_STARTUP_GRACE_SECONDS=60 \
-              -e AGENT_SERVER_USE_HOST_NETWORK=true \
+              -e OH_SANDBOX_KIND="DockerSandboxServiceInjector" \
+              -e OH_SANDBOX_CONTAINER_URL_PATTERN="http://$VM_HOST:{port}" \
+              -e OH_SANDBOX_HOST_PORT=3000 \
+              -e OH_SANDBOX_STARTUP_GRACE_SECONDS=60 \
+              -e OH_SANDBOX_USE_HOST_NETWORK=true \
+              -e OH_SANDBOX_MAX_NUM_SANDBOXES=1 \
               -e OH_PERSISTENCE_DIR=/.openhands \
               -e RUNTIME=docker \
               -e WORKSPACE_MOUNT_PATH=/opt/openhands/workspace \
@@ -153,13 +174,25 @@ jobs:
               --add-host host.docker.internal:host-gateway \
               "$IMAGE"
 
+            echo "Waiting for the OpenHands web application..."
+
             for attempt in $(seq 1 24); do
               if curl -fsS \
                 http://127.0.0.1:3000/ \
                 >/dev/null; then
 
+                echo "OpenHands web application is healthy."
+
                 sudo docker ps \
-                  --filter name=openhands
+                  --filter "name=openhands"
+
+                echo "Configured sandbox settings:"
+
+                sudo docker inspect openhands \
+                  --format '{{range .Config.Env}}{{println .}}{{end}}' |
+                  grep -E \
+                    '^(OH_SANDBOX_|OH_WEB_URL|OH_PERMITTED_CORS)' ||
+                  true
 
                 rm -f \
                   /tmp/openhands-deploy/openhands-image.tar
@@ -174,10 +207,10 @@ jobs:
             echo "OpenHands failed its startup health check."
 
             sudo docker ps -a \
-              --filter name=openhands
+              --filter "name=openhands"
 
             sudo docker logs \
-              --tail 200 \
+              --tail 250 \
               openhands
 
             exit 1
