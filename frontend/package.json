@@ -81,7 +81,7 @@
   "devDependencies": {
     "@eslint/eslintrc": "^3.3.4",
     "@mswjs/socket.io-binding": "^0.2.0",
-    "@playwright/test": "^1.58.2",
+    "@playwright/test": "^1.61.1",
     "@react-router/dev": "^7.15.0",
     "@tailwindcss/typography": "^0.5.19",
     "@tanstack/eslint-plugin-query": "^5.101.2",
@@ -95,7 +95,7 @@
     "@types/react-syntax-highlighter": "^15.5.13",
     "@typescript-eslint/eslint-plugin": "^8.63.0",
     "@typescript-eslint/parser": "^8.63.0",
-    "@vitest/coverage-v8": "^4.1.0",
+    "@vitest/coverage-v8": "^4.1.10",
     "cross-env": "^10.1.0",
     "eslint": "9.39.4",
     "eslint-config-airbnb": "^19.0.4",
@@ -109,7 +109,7 @@
     "eslint-plugin-react-hooks": "^7.1.1",
     "eslint-plugin-unused-imports": "^4.4.1",
     "husky": "^9.1.7",
-    "jsdom": "^27.4.0",
+    "jsdom": "^29.1.1",
     "lint-staged": "^16.2.7",
     "msw": "^2.6.6",
     "prettier": "^3.8.0",
@@ -117,7 +117,7 @@
     "typescript": "^7.0.2",
     "vite-plugin-svgr": "^5.2.0",
     "vite-tsconfig-paths": "^6.1.0",
-    "vitest": "^4.1.0"
+    "vitest": "^4.1.10"
   },
   "packageManager": "npm@10.5.0",
   "volta": {
