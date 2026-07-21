@@ -33,6 +33,7 @@ jobs:
           VM_SSH_PRIVATE_KEY: ${{ secrets.VM_SSH_PRIVATE_KEY }}
         run: |
           set -euo pipefail
+
           test -n "${{ vars.AZURE_CLIENT_ID }}"
           test -n "${{ vars.AZURE_TENANT_ID }}"
           test -n "${{ vars.AZURE_SUBSCRIPTION_ID }}"
@@ -50,11 +51,21 @@ jobs:
 
       - name: Verify Azure access
         run: |
-          az account show --query "{subscription:name,tenant:tenantId}" -o table
-          az acr show --name "$ACR_NAME" --query "{name:name,loginServer:loginServer}" -o table
+          set -euo pipefail
+
+          az account show \
+            --query "{subscription:name,tenant:tenantId}" \
+            -o table
+
+          az acr show \
+            --name "$ACR_NAME" \
+            --query "{name:name,loginServer:loginServer}" \
+            -o table
 
       - name: Login to Azure Container Registry
-        run: az acr login --name "$ACR_NAME"
+        run: |
+          set -euo pipefail
+          az acr login --name "$ACR_NAME"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
@@ -75,6 +86,7 @@ jobs:
       - name: Export the published image
         run: |
           set -euo pipefail
+
           docker pull "$IMAGE"
           docker save "$IMAGE" -o openhands-image.tar
           ls -lh openhands-image.tar
@@ -104,10 +116,12 @@ jobs:
 
             command -v docker >/dev/null
 
-            sudo docker load -i /tmp/openhands-deploy/openhands-image.tar
+            sudo docker load \
+              -i /tmp/openhands-deploy/openhands-image.tar
 
-            sudo mkdir -p /opt/openhands/home
-            sudo mkdir -p /opt/openhands/workspace
+            sudo mkdir -p \
+              /opt/openhands/home \
+              /opt/openhands/workspace
 
             sudo chown -R 42420:42420 \
               /opt/openhands/home \
@@ -125,7 +139,11 @@ jobs:
               -p 3000:3000 \
               -e PORT=3000 \
               -e OH_WEB_URL="http://$VM_HOST:3000" \
-              -e WEB_HOST="$VM_HOST:3000" \
+              -e OH_PERMITTED_CORS_ORIGINS_0="http://$VM_HOST:3000" \
+              -e SANDBOX_HOST_PORT=3000 \
+              -e SANDBOX_CONTAINER_URL_PATTERN="http://$VM_HOST:{port}" \
+              -e SANDBOX_STARTUP_GRACE_SECONDS=60 \
+              -e AGENT_SERVER_USE_HOST_NETWORK=true \
               -e OH_PERSISTENCE_DIR=/.openhands \
               -e RUNTIME=docker \
               -e WORKSPACE_MOUNT_PATH=/opt/openhands/workspace \
@@ -136,9 +154,16 @@ jobs:
               "$IMAGE"
 
             for attempt in $(seq 1 24); do
-              if curl -fsS http://127.0.0.1:3000/ >/dev/null; then
-                sudo docker ps --filter name=openhands
-                rm -f /tmp/openhands-deploy/openhands-image.tar
+              if curl -fsS \
+                http://127.0.0.1:3000/ \
+                >/dev/null; then
+
+                sudo docker ps \
+                  --filter name=openhands
+
+                rm -f \
+                  /tmp/openhands-deploy/openhands-image.tar
+
                 exit 0
               fi
 
@@ -146,7 +171,15 @@ jobs:
               sleep 5
             done
 
-            sudo docker logs --tail 200 openhands
+            echo "OpenHands failed its startup health check."
+
+            sudo docker ps -a \
+              --filter name=openhands
+
+            sudo docker logs \
+              --tail 200 \
+              openhands
+
             exit 1
 
       - name: Deployment URL
@@ -155,4 +188,5 @@ jobs:
 
       - name: Logout from Azure
         if: always()
-        run: az logout
+        run: |
+          az logout || true
