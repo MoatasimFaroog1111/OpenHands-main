@@ -173,6 +173,8 @@ jobs:
 
             command -v docker >/dev/null
 
+            SANDBOX_HOST="${VM_HOST}.sslip.io"
+
             echo "Loading the new OpenHands image..."
 
             sudo docker load \
@@ -213,11 +215,13 @@ jobs:
               --restart unless-stopped \
               --name openhands \
               -p 3000:3000 \
+              --add-host host.docker.internal:host-gateway \
+              --add-host "$SANDBOX_HOST:host-gateway" \
               -e PORT=3000 \
               -e OH_WEB_URL="http://$VM_HOST:3000" \
               -e OH_PERMITTED_CORS_ORIGINS_0="http://$VM_HOST:3000" \
               -e OH_SANDBOX_KIND="DockerSandboxServiceInjector" \
-              -e OH_SANDBOX_CONTAINER_URL_PATTERN="http://$VM_HOST:{port}" \
+              -e OH_SANDBOX_CONTAINER_URL_PATTERN="http://$SANDBOX_HOST:{port}" \
               -e OH_SANDBOX_HOST_PORT=3000 \
               -e OH_SANDBOX_STARTUP_GRACE_SECONDS=90 \
               -e OH_SANDBOX_USE_HOST_NETWORK=true \
@@ -228,7 +232,6 @@ jobs:
               -v /var/run/docker.sock:/var/run/docker.sock \
               -v /opt/openhands/home:/.openhands \
               -v /opt/openhands/workspace:/opt/workspace_base \
-              --add-host host.docker.internal:host-gateway \
               "$IMAGE"
 
             echo "Waiting for the OpenHands web application..."
@@ -242,6 +245,11 @@ jobs:
 
                 sudo docker ps \
                   --filter "name=openhands"
+
+                echo "Verifying sandbox hostname routing..."
+
+                sudo docker exec openhands \
+                  getent hosts "$SANDBOX_HOST"
 
                 echo "Configured sandbox settings:"
 
