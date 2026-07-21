@@ -67,6 +67,63 @@ jobs:
           set -euo pipefail
           az acr login --name "$ACR_NAME"
 
+      - name: Patch single host-network sandbox lifecycle
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path(
+              "openhands/app_server/sandbox/docker_sandbox_service.py"
+          )
+
+          source = path.read_text(encoding="utf-8")
+
+          old = (
+              "        # Enforce sandbox limits by cleaning up old sandboxes\n"
+              "        await self.pause_old_sandboxes("
+              "self.max_num_sandboxes - 1)\n"
+          )
+
+          new = (
+              "        # Host-network sandboxes use fixed ports. When only one\n"
+              "        # sandbox is allowed, remove any existing sandbox before\n"
+              "        # starting its replacement so ports 8000/8001 are released.\n"
+              "        if self.use_host_network and self.max_num_sandboxes == 1:\n"
+              "            for existing in self.docker_client.containers.list("
+              "all=True):\n"
+              "                if existing.name and existing.name.startswith(\n"
+              "                    self.container_name_prefix\n"
+              "                ):\n"
+              "                    existing.remove(force=True)\n"
+              "        else:\n"
+              "            await self.pause_old_sandboxes(\n"
+              "                self.max_num_sandboxes - 1\n"
+              "            )\n"
+          )
+
+          if old not in source:
+              raise RuntimeError(
+                  "Expected sandbox lifecycle code was not found. "
+                  "The source may have changed."
+              )
+
+          patched = source.replace(old, new, 1)
+          path.write_text(patched, encoding="utf-8")
+
+          print("Single host-network sandbox lifecycle patch applied.")
+          PY
+
+      - name: Verify sandbox patch
+        run: |
+          set -euo pipefail
+
+          grep -n \
+            "Host-network sandboxes use fixed ports" \
+            openhands/app_server/sandbox/docker_sandbox_service.py
+
+          python -m py_compile \
+            openhands/app_server/sandbox/docker_sandbox_service.py
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4
 
@@ -162,7 +219,7 @@ jobs:
               -e OH_SANDBOX_KIND="DockerSandboxServiceInjector" \
               -e OH_SANDBOX_CONTAINER_URL_PATTERN="http://$VM_HOST:{port}" \
               -e OH_SANDBOX_HOST_PORT=3000 \
-              -e OH_SANDBOX_STARTUP_GRACE_SECONDS=60 \
+              -e OH_SANDBOX_STARTUP_GRACE_SECONDS=90 \
               -e OH_SANDBOX_USE_HOST_NETWORK=true \
               -e OH_SANDBOX_MAX_NUM_SANDBOXES=1 \
               -e OH_PERSISTENCE_DIR=/.openhands \
@@ -176,7 +233,7 @@ jobs:
 
             echo "Waiting for the OpenHands web application..."
 
-            for attempt in $(seq 1 24); do
+            for attempt in $(seq 1 30); do
               if curl -fsS \
                 http://127.0.0.1:3000/ \
                 >/dev/null; then
