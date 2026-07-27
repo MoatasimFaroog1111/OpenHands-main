@@ -2,6 +2,22 @@
 set -eo pipefail
 
 echo "Starting OpenHands..."
+
+# Railway provides the public hostname at runtime. Derive the OpenHands public
+# URL and CORS origin automatically unless the operator supplied explicit values.
+if [[ -n "${RAILWAY_PUBLIC_DOMAIN:-}" ]]; then
+  export OH_WEB_URL="${OH_WEB_URL:-https://${RAILWAY_PUBLIC_DOMAIN}}"
+  export OH_PERMITTED_CORS_ORIGINS_0="${OH_PERMITTED_CORS_ORIGINS_0:-https://${RAILWAY_PUBLIC_DOMAIN}}"
+fi
+
+# A Railway volume mounted at /data hides directories created at image-build
+# time, so recreate the persistence and temporary workspace directories on boot.
+for directory in "${OH_PERSISTENCE_DIR:-}" "${FILE_STORE_PATH:-}" "${TMPDIR:-}"; do
+  if [[ -n "$directory" ]]; then
+    mkdir -p "$directory"
+  fi
+done
+
 if [[ $NO_SETUP == "true" ]]; then
   echo "Skipping setup, running as $(whoami)"
   "$@"
