@@ -1,4 +1,9 @@
-# Railway and other root-Dockerfile platforms build the complete OpenHands app.
+# Railway builds the complete OpenHands application from this root Dockerfile.
+#
+# Railway services cannot run Docker-in-Docker or mount the host Docker socket,
+# so this image defaults to the process sandbox. Set RUNTIME=remote and provide
+# SANDBOX_REMOTE_RUNTIME_API_URL plus SANDBOX_API_KEY to use an isolated remote
+# sandbox provider instead.
 ARG OPENHANDS_BUILD_VERSION=dev
 FROM node:25.9-trixie-slim AS frontend-builder
 
@@ -37,18 +42,31 @@ ARG OPENHANDS_BUILD_VERSION
 
 ENV RUN_AS_OPENHANDS=true
 ENV OPENHANDS_USER_ID=42420
-ENV SANDBOX_LOCAL_RUNTIME_URL=http://host.docker.internal
-ENV USE_HOST_NETWORK=false
+ENV RUNTIME=process
+ENV OH_PERSISTENCE_DIR=/data/.openhands
+ENV FILE_STORE=local
+ENV FILE_STORE_PATH=/data/.openhands
+ENV TMPDIR=/data/tmp
 ENV WORKSPACE_BASE=/opt/workspace_base
 ENV OPENHANDS_BUILD_VERSION=$OPENHANDS_BUILD_VERSION
 ENV SANDBOX_USER_ID=0
-ENV FILE_STORE=local
-ENV FILE_STORE_PATH=/.openhands
 ENV INIT_GIT_IN_EMPTY_WORKSPACE=1
-RUN mkdir -p $FILE_STORE_PATH $WORKSPACE_BASE
+
+RUN mkdir -p \
+    "$OH_PERSISTENCE_DIR" \
+    "$TMPDIR" \
+    "$WORKSPACE_BASE"
 
 RUN apt-get update -y \
-    && apt-get install -y curl git ssh sudo \
+    && apt-get install -y \
+        build-essential \
+        curl \
+        git \
+        jq \
+        nodejs \
+        npm \
+        openssh-client \
+        sudo \
     && rm -rf /var/lib/apt/lists/*
 
 RUN sed -i 's/^UID_MIN.*/UID_MIN 499/' /etc/login.defs
@@ -59,8 +77,8 @@ RUN useradd -l -m -u $OPENHANDS_USER_ID --gid $OPENHANDS_USER_ID -s /bin/bash op
     usermod -aG openhands openhands && \
     usermod -aG sudo openhands && \
     echo '%sudo ALL=(ALL) NOPASSWD:ALL' >> /etc/sudoers
-RUN chown -R openhands:openhands /app && chmod -R 770 /app
-RUN chown -R openhands:openhands $WORKSPACE_BASE && chmod -R 770 $WORKSPACE_BASE
+RUN chown -R openhands:openhands /app /data && chmod -R 770 /app /data
+RUN chown -R openhands:openhands "$WORKSPACE_BASE" && chmod -R 770 "$WORKSPACE_BASE"
 USER openhands
 
 ENV VIRTUAL_ENV=/app/.venv \
