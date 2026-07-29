@@ -1,3 +1,4 @@
+import os
 from urllib.parse import urlparse, urlunparse
 
 from openhands.app_server.utils.environment import is_running_in_docker
@@ -23,6 +24,8 @@ def replace_localhost_hostname_for_docker(
         otherwise returns the original URL unchanged
     """
     if not is_running_in_docker():
+        return url
+    if os.environ.get('RUNTIME') in ('local', 'process'):
         return url
     parsed = urlparse(url)
     if parsed.hostname == 'localhost':

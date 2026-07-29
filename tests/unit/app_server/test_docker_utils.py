@@ -295,3 +295,23 @@ class TestReplaceLocalhostHostnameForDocker:
         # Only hostname should be different
         assert original_parsed.hostname == 'localhost'
         assert result_parsed.hostname == 'host.docker.internal'
+
+    @patch(
+        'openhands.app_server.utils.docker_utils.is_running_in_docker',
+        return_value=True,
+    )
+    @patch.dict('os.environ', {'RUNTIME': 'local'})
+    def test_no_replace_in_local_runtime(self, mock_is_docker):
+        """Test that localhost is NOT replaced when RUNTIME is local, even inside Docker."""
+        result = replace_localhost_hostname_for_docker('http://localhost:8080')
+        assert result == 'http://localhost:8080'
+
+    @patch(
+        'openhands.app_server.utils.docker_utils.is_running_in_docker',
+        return_value=True,
+    )
+    @patch.dict('os.environ', {'RUNTIME': 'process'})
+    def test_no_replace_in_process_runtime(self, mock_is_docker):
+        """Test that localhost is NOT replaced when RUNTIME is process, even inside Docker."""
+        result = replace_localhost_hostname_for_docker('http://localhost:8080')
+        assert result == 'http://localhost:8080'
