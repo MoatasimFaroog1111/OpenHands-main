@@ -301,17 +301,17 @@ class TestReplaceLocalhostHostnameForDocker:
         return_value=True,
     )
     @patch.dict('os.environ', {'RUNTIME': 'local'})
-    def test_no_replace_in_local_runtime(self, mock_is_docker):
-        """Test that localhost is NOT replaced when RUNTIME is local, even inside Docker."""
+    def test_replace_in_local_runtime_when_containerized(self, mock_is_docker):
+        """Runtime mode must not bypass Docker network address translation."""
         result = replace_localhost_hostname_for_docker('http://localhost:8080')
-        assert result == 'http://localhost:8080'
+        assert result == 'http://host.docker.internal:8080'
 
     @patch(
         'openhands.app_server.utils.docker_utils.is_running_in_docker',
         return_value=True,
     )
     @patch.dict('os.environ', {'RUNTIME': 'process'})
-    def test_no_replace_in_process_runtime(self, mock_is_docker):
-        """Test that localhost is NOT replaced when RUNTIME is process, even inside Docker."""
+    def test_replace_in_process_runtime_when_containerized(self, mock_is_docker):
+        """Process mode still runs inside the container network namespace."""
         result = replace_localhost_hostname_for_docker('http://localhost:8080')
-        assert result == 'http://localhost:8080'
+        assert result == 'http://host.docker.internal:8080'
