@@ -23,6 +23,7 @@ from openhands.app_server.middleware import (
     LocalhostCORSMiddleware,
     RateLimitMiddleware,
 )
+from openhands.app_server.sandbox import sandbox_proxy_router
 from openhands.app_server.static import SPAStaticFiles
 from openhands.app_server.status.status_router import router as health_router
 from openhands.app_server.version import get_version
@@ -70,6 +71,12 @@ async def authentication_error_handler(request: Request, exc: AuthenticationErro
 
 app.include_router(v1_router.router)
 app.include_router(health_router)
+
+# Publish sandbox ports under this origin at /runtime/{port} so browsers can
+# reach agent-servers that only listen on loopback. Mounted before the SPA
+# catch-all so the static file handler does not swallow the proxy paths.
+if sandbox_proxy_router.is_proxy_enabled():
+    app.include_router(sandbox_proxy_router.router)
 
 # Middleware and static file setup (merged from listen.py)
 if os.getenv('SERVE_FRONTEND', 'true').lower() == 'true':

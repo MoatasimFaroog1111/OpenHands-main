@@ -11,6 +11,12 @@ export type V1SandboxStatus =
 export interface V1ExposedUrl {
   name: string;
   url: string;
+  /**
+   * Browser facing URL, set when `url` is not reachable from the end user
+   * (loopback address, or a port the hosting platform does not publish).
+   * May be root relative, e.g. "/runtime/8000".
+   */
+  public_url?: string | null;
 }
 
 export interface V1SandboxInfo {

@@ -644,7 +644,11 @@ class LiveStatusAppConversationService(AppConversationServiceBase):
         if sandbox and sandbox.exposed_urls:
             conversation_url = next(
                 (
-                    exposed_url.url
+                    # The browser may not be able to reach the sandbox at the
+                    # address the app server uses internally (loopback address
+                    # or unpublished port), so prefer the public URL when the
+                    # sandbox service provides one.
+                    exposed_url.browser_url()
                     for exposed_url in sandbox.exposed_urls
                     if exposed_url.name == AGENT_SERVER
                 ),

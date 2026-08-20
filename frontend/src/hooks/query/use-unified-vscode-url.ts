@@ -56,7 +56,7 @@ export const useUnifiedVSCodeUrl = () => {
       }
 
       return {
-        url: transformVSCodeUrl(vscodeUrl.url),
+        url: transformVSCodeUrl(vscodeUrl.public_url || vscodeUrl.url),
         error: null,
       };
     },
