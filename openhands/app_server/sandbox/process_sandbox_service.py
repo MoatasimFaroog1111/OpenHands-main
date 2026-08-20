@@ -266,9 +266,7 @@ class ProcessSandboxService(SandboxService):
                         ExposedUrl(
                             name=AGENT_SERVER,
                             url=self._agent_server_base_url(process_info.port),
-                            public_url=self._agent_server_public_url(
-                                process_info.port
-                            ),
+                            public_url=self._agent_server_public_url(process_info.port),
                             port=process_info.port,
                         ),
                     ]
