@@ -33,7 +33,8 @@ function AppContent() {
   const { conversationId } = useConversationId();
   const clearEvents = useEventStore((state) => state.clearEvents);
 
-  // Handle both task IDs (task-{uuid}) and regular conversation IDs
+  // Handle both task IDs (task-{uuid}) and regular conversation IDs.
+  // A task ID is not a conversation UUID and must never reach conversation APIs.
   const { isTask, taskStatus, taskDetail } = useTaskPolling();
 
   const { data: conversation, isFetched } = useActiveConversation();
@@ -81,6 +82,10 @@ function AppContent() {
   // 3. Handle conversation not found
   // NOTE: Resuming STOPPED conversations is handled by useSandboxRecovery in WebSocketProviderWrapper
   React.useEffect(() => {
+    // A task URL is intentionally not a conversation yet. Task polling will
+    // replace it with the real conversation UUID when the backend reports READY.
+    if (isTask) return;
+
     // Wait for data to be fetched
     if (!isFetched || !isAuthed) return;
 
@@ -89,7 +94,35 @@ function AppContent() {
       displayErrorToast(t(I18nKey.CONVERSATION$NOT_EXIST_OR_NO_PERMISSION));
       navigate("/");
     }
-  }, [conversation, isFetched, isAuthed, navigate, t]);
+  }, [isTask, conversation, isFetched, isAuthed, navigate, t]);
+
+  // Task IDs are temporary start-task handles, not conversation UUIDs. Keep the
+  // route in a lightweight polling state until useTaskPolling replaces the URL
+  // with the actual conversation ID. In particular, do not mount websocket or
+  // conversation providers here because they call APIs that require UUIDs.
+  if (isTask) {
+    const statusText =
+      taskStatus === "ERROR"
+        ? taskDetail || taskStatus
+        : taskStatus?.replaceAll("_", " ");
+
+    return (
+      <div
+        data-testid="conversation-start-task-gate"
+        className="flex h-full items-center justify-center"
+      >
+        <div className="flex flex-col items-center gap-3 text-tertiary-alt">
+          {taskStatus !== "ERROR" && (
+            <div
+              aria-hidden="true"
+              className="h-8 w-8 animate-spin rounded-full border-2 border-current border-t-transparent"
+            />
+          )}
+          {statusText && <span>{statusText}</span>}
+        </div>
+      </div>
+    );
+  }
 
   // Check if this is an archived conversation (sandbox no longer exists)
   const isArchived = conversation?.sandbox_status === "MISSING";
@@ -128,8 +161,7 @@ function AppContent() {
     </ConversationSubscriptionsProvider>
   );
 
-  // Render WebSocket provider immediately to avoid mount/remount cycles
-  // The providers internally handle waiting for conversation data to be ready
+  // Render WebSocket provider immediately for real conversation UUIDs only.
   return (
     <WebSocketProviderWrapper conversationId={conversationId}>
       {content}
