@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - .github/workflows/repair-frontend-typescript-lock.yml
+      - frontend/package.json
 
 permissions:
   contents: write
