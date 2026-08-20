@@ -28,9 +28,11 @@ jobs:
           npm ci
           npm run lint
       - name: Commit lockfile if changed
+        env:
+          HUSKY: '0'
         run: |
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git add frontend/package-lock.json
-          git diff --cached --quiet || git commit -m 'fix(frontend): regenerate lock for TypeScript 5.9'
+          git diff --cached --quiet || git commit --no-verify -m 'fix(frontend): regenerate lock for TypeScript 5.9'
           git push origin HEAD:${{ github.event.pull_request.head.ref }}
