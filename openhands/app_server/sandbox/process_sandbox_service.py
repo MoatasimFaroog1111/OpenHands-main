@@ -193,19 +193,31 @@ class ProcessSandboxService(SandboxService):
         return False
 
     def _get_process_status(self, process_info: ProcessInfo) -> SandboxStatus:
-        """Get the status of a process."""
+        """Map OS process liveness to sandbox lifecycle state.
+
+        An idle event-loop server is normally reported by Linux/psutil as
+        ``sleeping``. That is a healthy running process, not a sandbox that is
+        still starting. Readiness is determined separately by the HTTP health
+        probe, so only explicitly stopped processes are paused and terminal
+        process states are missing.
+        """
         try:
             process = psutil.Process(process_info.pid)
-            if process.is_running():
-                status = process.status()
-                if status == psutil.STATUS_RUNNING:
-                    return SandboxStatus.RUNNING
-                elif status == psutil.STATUS_STOPPED:
-                    return SandboxStatus.PAUSED
-                else:
-                    return SandboxStatus.STARTING
-            else:
+            if not process.is_running():
                 return SandboxStatus.MISSING
+
+            process_status = process.status()
+            if process_status == psutil.STATUS_STOPPED:
+                return SandboxStatus.PAUSED
+
+            terminal_statuses = {
+                getattr(psutil, 'STATUS_ZOMBIE', 'zombie'),
+                getattr(psutil, 'STATUS_DEAD', 'dead'),
+            }
+            if process_status in terminal_statuses:
+                return SandboxStatus.MISSING
+
+            return SandboxStatus.RUNNING
         except (psutil.NoSuchProcess, psutil.AccessDenied):
             return SandboxStatus.MISSING
 
