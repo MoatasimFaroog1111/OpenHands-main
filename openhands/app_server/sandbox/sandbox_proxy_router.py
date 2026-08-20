@@ -87,25 +87,73 @@ def get_allowed_port_range() -> tuple[int, int]:
     return base_port, base_port + _DEFAULT_PORT_RANGE
 
 
-def is_proxy_enabled() -> bool:
-    """Whether the sandbox proxy should be mounted on the app.
+def _env_flag(name: str) -> bool | None:
+    """Read a boolean env var, returning None when it is unset."""
+    value = os.getenv(name)
+    if value is None:
+        return None
+    return value.strip().lower() in ('1', 'true', 'yes', 'on')
 
-    Defaults to on for process sandboxes (the only kind served over loopback)
-    and off otherwise. ``SANDBOX_PROXY_ENABLED`` overrides both ways.
+
+def is_proxy_advertised() -> bool:
+    """Whether process sandboxes should hand ``/runtime/{port}`` to the browser.
+
+    A process sandbox only ever listens on loopback, so the proxy path is the
+    correct answer in every deployment: same origin works locally too. Set
+    ``SANDBOX_PROXY_ENABLED=false`` to fall back to the raw port.
     """
-    override = os.getenv('SANDBOX_PROXY_ENABLED')
+    override = _env_flag('SANDBOX_PROXY_ENABLED')
+    return True if override is None else override
+
+
+def is_proxy_enabled() -> bool:
+    """Whether the proxy routes should be mounted on the app.
+
+    Mounted whenever the app is configured to use process sandboxes. This is
+    read from the resolved sandbox injector rather than from ``RUNTIME``, so it
+    stays correct however the process runtime was selected (environment
+    variable, config file, or programmatic config).
+    """
+    override = _env_flag('SANDBOX_PROXY_ENABLED')
     if override is not None:
-        return override.strip().lower() in ('1', 'true', 'yes', 'on')
-    return os.getenv('RUNTIME', '').strip().lower() in ('local', 'process')
+        return override
+
+    # Imported lazily: config imports the sandbox services, which import this
+    # module for PROXY_PATH_PREFIX.
+    try:
+        from openhands.app_server.config import get_global_config
+        from openhands.app_server.sandbox.process_sandbox_service import (
+            ProcessSandboxServiceInjector,
+        )
+
+        return isinstance(get_global_config().sandbox, ProcessSandboxServiceInjector)
+    except Exception:
+        _logger.warning(
+            'Could not determine the sandbox type; leaving the sandbox proxy off',
+            exc_info=True,
+        )
+        return False
 
 
 def _check_port(port: int) -> None:
     min_port, max_port = get_allowed_port_range()
-    if not min_port <= port <= max_port:
+    if not min_port <= port <= max_port or port == _own_port():
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail=f'Port {port} is outside the sandbox port range',
         )
+
+
+def _own_port() -> int | None:
+    """The port this app server listens on, which must never be proxied.
+
+    On single port hosts ``PORT`` often lands inside the sandbox range, and
+    forwarding to it would make the app proxy to itself.
+    """
+    try:
+        return int(os.environ['PORT'])
+    except (KeyError, ValueError):
+        return None
 
 
 def _filter_headers(

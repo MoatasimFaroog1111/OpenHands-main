@@ -45,7 +45,13 @@ Authentication is unchanged: the agent-server still requires the
 `X-Session-API-Key` handed to the web client, and only ports inside the
 sandbox allocation range are forwarded.
 
+The proxy mounts itself whenever the resolved sandbox injector is a
+`ProcessSandboxServiceInjector`. That is read from the configuration rather
+than from `RUNTIME`, so it stays correct however the process runtime was
+selected. The app server's own `PORT` is never proxied, since on single port
+hosts it frequently lands inside the sandbox range.
+
 | Environment variable | Default | Meaning |
 | --- | --- | --- |
-| `SANDBOX_PROXY_ENABLED` | on when `RUNTIME` is `local` or `process` | Mount the proxy and advertise `/runtime/{port}` to the web client |
+| `SANDBOX_PROXY_ENABLED` | on for process sandboxes | Force the proxy on or off, overriding the automatic detection |
 | `OH_SANDBOX_BASE_PORT` | `8000` | First port of the sandbox allocation range the proxy is willing to forward to |
