@@ -39,9 +39,6 @@ from openhands.app_server.sandbox.sandbox_service import (
 from openhands.app_server.sandbox.sandbox_spec_models import SandboxSpecInfo
 from openhands.app_server.sandbox.sandbox_spec_service import SandboxSpecService
 from openhands.app_server.services.injector import InjectorState
-from openhands.app_server.utils.docker_utils import (
-    replace_localhost_hostname_for_docker,
-)
 
 _logger = logging.getLogger(__name__)
 
@@ -73,6 +70,10 @@ class ProcessSandboxService(SandboxService):
     - Operating in a dedicated directory
     - Listening on a unique port
     - Having its own session API key
+
+    Process-backed agent servers share the same network namespace as this
+    service. Their internal transport therefore always uses the loopback
+    interface and must not be rewritten using Docker host routing rules.
     """
 
     user_id: str | None
@@ -88,6 +89,23 @@ class ProcessSandboxService(SandboxService):
         """Initialize the service after dataclass creation."""
         # Ensure base working directory exists
         os.makedirs(self.base_working_dir, exist_ok=True)
+
+    @staticmethod
+    def _agent_server_base_url(port: int) -> str:
+        """Return the internal URL for a process-backed agent server.
+
+        A process sandbox is a child process in the same network namespace as
+        the app server. Keeping this topology decision here prevents generic
+        Docker URL normalization from leaking into process runtime behavior.
+        """
+        return f'http://127.0.0.1:{port}'
+
+    def _agent_server_health_url(self, port: int) -> str:
+        """Return the configured health-check URL for a local agent process."""
+        path = self.health_check_path
+        if not path.startswith('/'):
+            path = f'/{path}'
+        return f'{self._agent_server_base_url(port)}{path}'
 
     def _find_unused_port(self) -> int:
         """Find an unused port starting from base_port."""
@@ -163,9 +181,7 @@ class ProcessSandboxService(SandboxService):
         start_time = time.time()
         while time.time() - start_time < timeout:
             try:
-                url = replace_localhost_hostname_for_docker(
-                    f'http://localhost:{port}/alive'
-                )
+                url = self._agent_server_health_url(port)
                 response = await self.httpx_client.get(url, timeout=5.0)
                 if response.status_code == 200:
                     data = response.json()
@@ -205,15 +221,13 @@ class ProcessSandboxService(SandboxService):
         if status == SandboxStatus.RUNNING:
             # Check if server is actually responding
             try:
-                url = replace_localhost_hostname_for_docker(
-                    f'http://localhost:{process_info.port}{self.health_check_path}'
-                )
+                url = self._agent_server_health_url(process_info.port)
                 response = await self.httpx_client.get(url, timeout=5.0)
                 if response.status_code == 200:
                     exposed_urls = [
                         ExposedUrl(
                             name=AGENT_SERVER,
-                            url=f'http://localhost:{process_info.port}',
+                            url=self._agent_server_base_url(process_info.port),
                             port=process_info.port,
                         ),
                     ]

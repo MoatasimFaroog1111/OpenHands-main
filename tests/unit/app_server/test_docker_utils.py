@@ -295,3 +295,23 @@ class TestReplaceLocalhostHostnameForDocker:
         # Only hostname should be different
         assert original_parsed.hostname == 'localhost'
         assert result_parsed.hostname == 'host.docker.internal'
+
+    @patch(
+        'openhands.app_server.utils.docker_utils.is_running_in_docker',
+        return_value=True,
+    )
+    @patch.dict('os.environ', {'RUNTIME': 'local'})
+    def test_replace_in_local_runtime_when_containerized(self, mock_is_docker):
+        """Runtime mode must not bypass Docker network address translation."""
+        result = replace_localhost_hostname_for_docker('http://localhost:8080')
+        assert result == 'http://host.docker.internal:8080'
+
+    @patch(
+        'openhands.app_server.utils.docker_utils.is_running_in_docker',
+        return_value=True,
+    )
+    @patch.dict('os.environ', {'RUNTIME': 'process'})
+    def test_replace_in_process_runtime_when_containerized(self, mock_is_docker):
+        """Process mode still runs inside the container network namespace."""
+        result = replace_localhost_hostname_for_docker('http://localhost:8080')
+        assert result == 'http://host.docker.internal:8080'
