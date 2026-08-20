@@ -10,8 +10,10 @@ Since agents can do things that may harm your system, they are typically run ins
 
 - **SandboxService**: Abstract service for sandbox lifecycle management
 - **DockerSandboxService**: Docker-based sandbox implementation
+- **ProcessSandboxService**: Runs each agent-server as a child process on a loopback port (`RUNTIME=local`/`process`)
 - **SandboxSpecService**: Manages sandbox specifications and templates
 - **SandboxRouter**: FastAPI router for sandbox endpoints
+- **SandboxProxyRouter**: Same origin reverse proxy that republishes loopback sandbox ports at `/runtime/{port}`
 
 ## Features
 
@@ -19,3 +21,31 @@ Since agents can do things that may harm your system, they are typically run ins
 - Sandbox lifecycle management (create, start, stop, destroy)
 - Multiple sandbox backend support (Docker, Remote, Local)
 - User-scoped sandbox access control
+
+## Reaching a sandbox from the browser
+
+A `ProcessSandboxService` sandbox listens on `http://127.0.0.1:{port}`. That is
+the right address for calls the app server makes itself, but the browser
+usually cannot use it:
+
+- Single port hosts (Railway, Render, Fly.io, Heroku, ...) publish only the app
+  server's port, so `https://my-app.example.com:8001` does not resolve.
+- The container's loopback interface is not the user's loopback interface.
+
+Handing that URL to the web client leaves the event WebSocket permanently in
+the `Disconnected` state and panels such as *Changes* stuck on loading.
+
+To avoid this, `ExposedUrl` carries an optional `public_url` alongside the
+internal `url`. For process sandboxes it is set to `/runtime/{port}`, a path
+served by `sandbox_proxy_router`, which forwards both HTTP and WebSocket
+traffic to the loopback port. The web client resolves the path against its own
+origin, so everything travels over the one port the platform publishes.
+
+Authentication is unchanged: the agent-server still requires the
+`X-Session-API-Key` handed to the web client, and only ports inside the
+sandbox allocation range are forwarded.
+
+| Environment variable | Default | Meaning |
+| --- | --- | --- |
+| `SANDBOX_PROXY_ENABLED` | on when `RUNTIME` is `local` or `process` | Mount the proxy and advertise `/runtime/{port}` to the web client |
+| `OH_SANDBOX_BASE_PORT` | `8000` | First port of the sandbox allocation range the proxy is willing to forward to |

@@ -1,4 +1,15 @@
 /**
+ * Returns an absolute origin usable as a base when resolving root relative
+ * conversation URLs. Falls back to composing protocol + host because some
+ * environments (and tests) stub `window.location` without `origin`.
+ */
+function browserOrigin(): string {
+  const { origin, protocol, host } = window.location;
+  if (origin) return origin;
+  return `${protocol || "http:"}//${host}`;
+}
+
+/**
  * Extracts the base host from conversation URL
  * @param conversationUrl The conversation URL containing host/port (e.g., "http://localhost:3000/api/conversations/123")
  * @returns Base host (e.g., "localhost:3000") or window.location.host as fallback
@@ -39,9 +50,13 @@ export function extractBaseHost(
 export function extractPathPrefix(
   conversationUrl: string | null | undefined,
 ): string {
-  if (!conversationUrl || conversationUrl.startsWith("/")) return "";
+  if (!conversationUrl) return "";
   try {
-    const { pathname } = new URL(conversationUrl);
+    // Root relative URLs (e.g. "/runtime/8000/api/conversations/123") are
+    // returned by same origin deployments where the app server reverse
+    // proxies the agent-server, so resolve them against the current origin
+    // instead of discarding the prefix.
+    const { pathname } = new URL(conversationUrl, browserOrigin());
     // The SDK serves both LLM and ACP conversations on the unified
     // ``/api/conversations`` route, so a single regex anchored at a segment
     // boundary is enough. ``$|/`` stops at the ``/{id}`` segment that

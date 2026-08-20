@@ -134,8 +134,20 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     def is_rate_limited_request(self, request: StarletteRequest) -> bool:
         return not (
             request.url.path.startswith('/assets')
+            or self._is_sandbox_proxy_request(request)
             or self._is_sandbox_resume_request(request)
         )
+
+    def _is_sandbox_proxy_request(self, request: StarletteRequest) -> bool:
+        """Traffic the web client used to send straight to the agent-server.
+
+        These requests only reach us because the sandbox is republished under
+        this origin at ``/runtime/{port}``; they are authenticated by the
+        sandbox session API key and can be chatty (event polling, git status,
+        file reads), so applying the app server's global bucket to them would
+        start returning 429s for conversations that previously worked.
+        """
+        return request.url.path.startswith('/runtime/')
 
     def _is_sandbox_resume_request(self, request: StarletteRequest) -> bool:
         return request.method == 'POST' and bool(_RESUME_RE.match(request.url.path))

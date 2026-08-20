@@ -3,7 +3,7 @@ import { openHands } from "../open-hands-axios";
 import { ConversationTrigger, GetVSCodeUrlResponse } from "../open-hands.types";
 import { Provider } from "#/types/settings";
 import { SuggestedTask } from "#/utils/types";
-import { buildHttpBaseUrl } from "#/utils/websocket-url";
+import { buildHttpBaseUrl, extractPathPrefix } from "#/utils/websocket-url";
 import { buildSessionHeaders } from "#/utils/utils";
 import type {
   V1SendMessageRequest,
@@ -488,23 +488,28 @@ class V1ConversationService {
     conversationUrl: string | null | undefined,
     sessionApiKey?: string | null,
   ): Promise<V1RuntimeConversationInfo> {
-    // The agent-server provides a full ``conversationUrl`` with a
+    // The agent-server provides a ``conversationUrl`` with a
     // ``/api/conversations/{id}`` path (the SDK unified the LLM and ACP
-    // endpoints onto this single route). We still preserve the URL's path
-    // verbatim because a proxy deployment may add a prefix (e.g.
-    // ``/runtime/55313/api/conversations/...``). If the URL is missing or
-    // malformed we fall back to the default path derived from
-    // ``window.location``.
-    //
-    // Either way we route through ``buildRuntimeUrl`` so its
-    // ``extractBaseHost`` rewrites localhost/127.0.0.1 to the browser's
-    // hostname when accessed from a non-local browser (proxy/external host
-    // deployments). Without this, a conversation_url containing
-    // ``localhost`` is unreachable from anywhere but the host machine.
+    // endpoints onto this single route). We preserve that path verbatim,
+    // minus any proxy prefix (e.g. ``/runtime/55313``) because
+    // ``buildRuntimeUrl`` re-adds the prefix itself — keeping it here too
+    // would produce ``/runtime/55313/runtime/55313/api/...``. The URL may be
+    // root relative on same origin deployments, so resolve it against
+    // ``window.location``. If it is missing or malformed we fall back to the
+    // default path.
     let path = `/api/conversations/${conversationId}`;
     if (conversationUrl) {
       try {
-        path = new URL(conversationUrl).pathname;
+        const { pathname } = new URL(
+          conversationUrl,
+          window.location.origin ||
+            `${window.location.protocol}//${window.location.host}`,
+        );
+        const pathPrefix = extractPathPrefix(conversationUrl);
+        path =
+          pathPrefix && pathname.startsWith(pathPrefix)
+            ? pathname.slice(pathPrefix.length)
+            : pathname;
       } catch {
         // Malformed URL — fall back to the default LLM path; buildRuntimeUrl
         // will resolve the host against window.location.

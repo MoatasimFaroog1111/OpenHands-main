@@ -32,6 +32,10 @@ from openhands.app_server.sandbox.sandbox_models import (
     SandboxRecord,
     SandboxStatus,
 )
+from openhands.app_server.sandbox.sandbox_proxy_router import (
+    PROXY_PATH_PREFIX,
+    is_proxy_enabled,
+)
 from openhands.app_server.sandbox.sandbox_service import (
     SandboxService,
     SandboxServiceInjector,
@@ -41,6 +45,14 @@ from openhands.app_server.sandbox.sandbox_spec_service import SandboxSpecService
 from openhands.app_server.services.injector import InjectorState
 
 _logger = logging.getLogger(__name__)
+
+
+def _env_int(name: str, default: int) -> int:
+    """Read an int from the environment, ignoring unparsable values."""
+    try:
+        return int(os.environ[name])
+    except (KeyError, ValueError):
+        return default
 
 
 class ProcessInfo(BaseModel):
@@ -84,6 +96,7 @@ class ProcessSandboxService(SandboxService):
     agent_server_module: str
     health_check_path: str
     httpx_client: httpx.AsyncClient
+    proxy_enabled: bool = True
 
     def __post_init__(self):
         """Initialize the service after dataclass creation."""
@@ -99,6 +112,19 @@ class ProcessSandboxService(SandboxService):
         Docker URL normalization from leaking into process runtime behavior.
         """
         return f'http://127.0.0.1:{port}'
+
+    def _agent_server_public_url(self, port: int) -> str | None:
+        """Return the browser facing URL for a process-backed agent server.
+
+        The loopback URL in ``_agent_server_base_url`` is only reachable from
+        inside this container. Browsers must go through the app server's own
+        origin instead, which is what the ``/runtime/{port}`` reverse proxy is
+        for. Returning ``None`` disables the rewrite and leaves the web client
+        talking to the raw port (the historic behavior).
+        """
+        if not self.proxy_enabled:
+            return None
+        return f'{PROXY_PATH_PREFIX}/{port}'
 
     def _agent_server_health_url(self, port: int) -> str:
         """Return the configured health-check URL for a local agent process."""
@@ -240,6 +266,7 @@ class ProcessSandboxService(SandboxService):
                         ExposedUrl(
                             name=AGENT_SERVER,
                             url=self._agent_server_base_url(process_info.port),
+                            public_url=self._agent_server_public_url(process_info.port),
                             port=process_info.port,
                         ),
                     ]
@@ -458,7 +485,11 @@ class ProcessSandboxServiceInjector(SandboxServiceInjector):
         description='Base directory for sandbox working directories',
     )
     base_port: int = Field(
-        default=8000, description='Base port number for agent servers'
+        default_factory=lambda: _env_int('OH_SANDBOX_BASE_PORT', 8000),
+        description=(
+            'Base port number for agent servers. Configure via the '
+            'OH_SANDBOX_BASE_PORT environment variable.'
+        ),
     )
     python_executable: str = Field(
         default=sys.executable,
@@ -470,6 +501,17 @@ class ProcessSandboxServiceInjector(SandboxServiceInjector):
     )
     health_check_path: str = Field(
         default='/alive', description='Health check endpoint path'
+    )
+    proxy_enabled: bool = Field(
+        default_factory=is_proxy_enabled,
+        description=(
+            'Publish each sandbox port under the app server origin at '
+            '/runtime/{port} and advertise that path to the web client. '
+            'Required whenever the browser cannot reach the sandbox loopback '
+            'port directly, which is the case for every single port host '
+            '(Railway, Render, Fly, Heroku, ...). Configure via the '
+            'SANDBOX_PROXY_ENABLED environment variable.'
+        ),
     )
 
     async def inject(
@@ -497,4 +539,5 @@ class ProcessSandboxServiceInjector(SandboxServiceInjector):
                 agent_server_module=self.agent_server_module,
                 health_check_path=self.health_check_path,
                 httpx_client=httpx_client,
+                proxy_enabled=self.proxy_enabled,
             )

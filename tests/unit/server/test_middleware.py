@@ -180,3 +180,34 @@ def test_rate_limit_middleware_exempts_sandbox_resume():
     assert rate_limited_response.status_code == 429
     assert resume_response.status_code == 200
     assert resume_response.json() == {'sandbox_id': 'sandbox-123'}
+
+
+def test_rate_limit_middleware_exempts_sandbox_proxy():
+    """Proxied sandbox traffic used to bypass the app server entirely.
+
+    Republishing sandboxes at ``/runtime/{port}`` routes agent-server polling
+    (events, git status, file reads) through this app. Counting it against the
+    global bucket would return 429s for conversations that previously worked.
+    """
+    app = FastAPI()
+
+    @app.get('/runtime/{port}/{path:path}')
+    def proxy(port: int, path: str):
+        return {'port': port, 'path': path}
+
+    @app.get('/api/v1/app-conversations')
+    def batch_get_app_conversations(ids: str):
+        return {'ids': ids}
+
+    app.add_middleware(
+        RateLimitMiddleware,
+        rate_limiter=InMemoryRateLimiter(requests=0, seconds=60, sleep_seconds=0),
+    )
+    client = TestClient(app)
+
+    rate_limited_response = client.get('/api/v1/app-conversations?ids=conv-123')
+    proxied_response = client.get('/runtime/8000/api/git/changes')
+
+    assert rate_limited_response.status_code == 429
+    assert proxied_response.status_code == 200
+    assert proxied_response.json() == {'port': 8000, 'path': 'api/git/changes'}

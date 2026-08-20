@@ -88,6 +88,14 @@ describe("websocket-url utilities", () => {
       expect(extractPathPrefix(undefined)).toBe("");
       expect(extractPathPrefix("not-a-valid-url")).toBe("");
     });
+
+    it("should extract the prefix from a root relative same origin URL", () => {
+      // Single port hosts (Railway, Render, Fly, ...) reverse proxy the
+      // sandbox under the app origin and hand the web client a relative URL.
+      expect(extractPathPrefix("/runtime/8000/api/conversations/abc123")).toBe(
+        "/runtime/8000",
+      );
+    });
   });
 
   describe("buildHttpBaseUrl", () => {
@@ -121,6 +129,11 @@ describe("websocket-url utilities", () => {
       const result = buildHttpBaseUrl(null);
       expect(result).toBe("https://localhost:3001");
     });
+
+    it("should build a same origin URL from a root relative conversation URL", () => {
+      const result = buildHttpBaseUrl("/runtime/8000/api/conversations/abc123");
+      expect(result).toBe("https://localhost:3001/runtime/8000");
+    });
   });
 
   describe("buildWebSocketUrl", () => {
@@ -151,6 +164,20 @@ describe("websocket-url utilities", () => {
       );
       expect(result).toBe(
         "wss://openhands.example.com/runtime/55313/sockets/events/abc123",
+      );
+    });
+
+    it("should keep the sandbox reachable when the conversation URL is root relative", () => {
+      // Regression: single port hosts only publish the app server port, so a
+      // loopback conversation URL produced an unreachable wss://host:8000/...
+      // and the UI hung on "Disconnected". The app server now advertises a
+      // same origin /runtime/{port} path instead.
+      const result = buildWebSocketUrl(
+        "abc123",
+        "/runtime/8000/api/conversations/abc123",
+      );
+      expect(result).toBe(
+        "wss://localhost:3001/runtime/8000/sockets/events/abc123",
       );
     });
 

@@ -21,6 +21,20 @@ class ExposedUrl(BaseModel):
     name: str
     url: str
     port: int
+    public_url: str | None = Field(
+        default=None,
+        description=(
+            'Browser facing URL for this service, used when the address in `url` is '
+            'not reachable from the end user (for example a loopback address, or a '
+            'port that is not published by the hosting platform). May be a root '
+            'relative path such as `/runtime/8000`, in which case it is resolved '
+            'against the origin serving the web client. When unset, `url` is used.'
+        ),
+    )
+
+    def browser_url(self) -> str:
+        """Return the URL a browser should use to reach this service."""
+        return self.public_url or self.url
 
 
 # Standard names

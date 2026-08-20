@@ -3489,6 +3489,56 @@ class TestAgentKindConversationUrl:
             'http://localhost:8000/api/conversations/11111111111111111111111111111111'
         )
 
+    def test_build_conversation_url_prefers_the_browser_facing_url(self):
+        """Process sandboxes are loopback only; the browser needs the proxy path.
+
+        Regression: on single port hosts (Railway, Render, Fly, ...) the
+        loopback URL was handed straight to the web client, which then tried
+        to open ``wss://<app-host>:8000/...`` and sat on "Disconnected".
+        """
+        from uuid import UUID
+
+        from openhands.app_server.app_conversation.app_conversation_models import (
+            AppConversationInfo,
+        )
+        from openhands.app_server.sandbox.sandbox_models import (
+            AGENT_SERVER,
+            ExposedUrl,
+            SandboxInfo,
+            SandboxStatus,
+        )
+
+        service = LiveStatusAppConversationService.__new__(
+            LiveStatusAppConversationService
+        )
+
+        info = AppConversationInfo(
+            id=UUID('11111111-1111-1111-1111-111111111111'),
+            created_by_user_id=None,
+            sandbox_id='sandbox-a',
+            agent_kind='openhands',
+        )
+        sandbox = SandboxInfo(
+            id='sandbox-a',
+            created_by_user_id=None,
+            sandbox_spec_id='spec',
+            status=SandboxStatus.RUNNING,
+            session_api_key='sk',
+            exposed_urls=[
+                ExposedUrl(
+                    name=AGENT_SERVER,
+                    url='http://127.0.0.1:8000',
+                    public_url='/runtime/8000',
+                    port=8000,
+                ),
+            ],
+        )
+        result = service._build_conversation(info, sandbox, None)
+        assert result is not None
+        assert result.conversation_url == (
+            '/runtime/8000/api/conversations/11111111111111111111111111111111'
+        )
+
 
 class TestBuildAcpStartConversationRequestSecrets:
     """Tests for secret injection in ``_build_acp_start_conversation_request``.
