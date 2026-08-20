@@ -34,7 +34,7 @@ from openhands.app_server.sandbox.sandbox_models import (
 )
 from openhands.app_server.sandbox.sandbox_proxy_router import (
     PROXY_PATH_PREFIX,
-    is_proxy_enabled,
+    is_proxy_advertised,
 )
 from openhands.app_server.sandbox.sandbox_service import (
     SandboxService,
@@ -503,14 +503,14 @@ class ProcessSandboxServiceInjector(SandboxServiceInjector):
         default='/alive', description='Health check endpoint path'
     )
     proxy_enabled: bool = Field(
-        default_factory=is_proxy_enabled,
+        default_factory=is_proxy_advertised,
         description=(
             'Publish each sandbox port under the app server origin at '
             '/runtime/{port} and advertise that path to the web client. '
-            'Required whenever the browser cannot reach the sandbox loopback '
-            'port directly, which is the case for every single port host '
-            '(Railway, Render, Fly, Heroku, ...). Configure via the '
-            'SANDBOX_PROXY_ENABLED environment variable.'
+            'A process sandbox only listens on loopback, so this is on by '
+            'default; it is what makes the sandbox reachable behind a single '
+            'port host (Railway, Render, Fly, Heroku, ...). Set '
+            'SANDBOX_PROXY_ENABLED=false to expose the raw port instead.'
         ),
     )
 

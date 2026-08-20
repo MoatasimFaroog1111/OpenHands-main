@@ -10,6 +10,7 @@ import asyncio
 import socket
 import threading
 import time
+from types import SimpleNamespace
 
 import pytest
 import uvicorn
@@ -20,6 +21,7 @@ from fastapi.testclient import TestClient
 from openhands.app_server.sandbox import sandbox_proxy_router
 from openhands.app_server.sandbox.sandbox_proxy_router import (
     get_allowed_port_range,
+    is_proxy_advertised,
     is_proxy_enabled,
     router,
 )
@@ -101,27 +103,58 @@ def client():
 
 
 class TestProxyEnabled:
-    def test_disabled_by_default_for_docker_runtime(self, monkeypatch):
-        """Docker sandboxes publish reachable ports, so no proxy is needed."""
+    """The proxy must switch itself on exactly when sandboxes are loopback."""
+
+    def test_enabled_when_the_app_uses_process_sandboxes(self, monkeypatch):
+        from openhands.app_server import config as app_config
+        from openhands.app_server.sandbox.process_sandbox_service import (
+            ProcessSandboxServiceInjector,
+        )
+
         monkeypatch.delenv('SANDBOX_PROXY_ENABLED', raising=False)
-        monkeypatch.delenv('RUNTIME', raising=False)
+        monkeypatch.setattr(
+            app_config,
+            'get_global_config',
+            lambda: SimpleNamespace(sandbox=ProcessSandboxServiceInjector()),
+        )
+        assert is_proxy_enabled() is True
+
+    def test_disabled_for_other_sandbox_types(self, monkeypatch):
+        """Docker and remote sandboxes publish reachable ports already."""
+        from openhands.app_server import config as app_config
+
+        monkeypatch.delenv('SANDBOX_PROXY_ENABLED', raising=False)
+        monkeypatch.setattr(
+            app_config,
+            'get_global_config',
+            lambda: SimpleNamespace(sandbox=object()),
+        )
         assert is_proxy_enabled() is False
 
-    @pytest.mark.parametrize('runtime', ['local', 'process', 'PROCESS'])
-    def test_enabled_by_default_for_process_runtime(self, monkeypatch, runtime):
-        """Process sandboxes are loopback only and always need the proxy."""
+    def test_disabled_when_the_config_cannot_be_read(self, monkeypatch):
+        """A broken config must not take the whole app server down."""
+        from openhands.app_server import config as app_config
+
+        def boom():
+            raise RuntimeError('no config')
+
         monkeypatch.delenv('SANDBOX_PROXY_ENABLED', raising=False)
-        monkeypatch.setenv('RUNTIME', runtime)
-        assert is_proxy_enabled() is True
+        monkeypatch.setattr(app_config, 'get_global_config', boom)
+        assert is_proxy_enabled() is False
 
     @pytest.mark.parametrize(
         'value,expected',
         [('1', True), ('true', True), ('on', True), ('0', False), ('false', False)],
     )
     def test_env_override_wins(self, monkeypatch, value, expected):
-        monkeypatch.setenv('RUNTIME', 'docker')
         monkeypatch.setenv('SANDBOX_PROXY_ENABLED', value)
         assert is_proxy_enabled() is expected
+        assert is_proxy_advertised() is expected
+
+    def test_process_sandboxes_advertise_the_proxy_by_default(self, monkeypatch):
+        """Loopback is never browser reachable, so advertise it unconditionally."""
+        monkeypatch.delenv('SANDBOX_PROXY_ENABLED', raising=False)
+        assert is_proxy_advertised() is True
 
     def test_port_range_follows_sandbox_base_port(self, monkeypatch):
         monkeypatch.setenv('OH_SANDBOX_BASE_PORT', '9000')
@@ -152,6 +185,13 @@ class TestHttpProxy:
     def test_rejects_ports_outside_the_sandbox_range(self, client):
         min_port, _ = get_allowed_port_range()
         response = client.get(f'/runtime/{min_port - 1}/api/echo')
+        assert response.status_code == 403
+
+    def test_refuses_to_proxy_the_app_servers_own_port(self, client, monkeypatch):
+        """PORT often lands inside the sandbox range; proxying it would loop."""
+        min_port, _ = get_allowed_port_range()
+        monkeypatch.setenv('PORT', str(min_port + 1))
+        response = client.get(f'/runtime/{min_port + 1}/api/echo')
         assert response.status_code == 403
 
     def test_bad_gateway_when_sandbox_is_gone(self, client):
