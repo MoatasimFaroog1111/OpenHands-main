@@ -72,7 +72,12 @@ async function handleControl(
   url: URL,
 ): Promise<void> {
   if (request.method === 'POST' && url.pathname === '/start') {
-    const runtime = await service.start(await readJson<StartRuntimeRequest>(request));
+    const startRequest = await readJson<StartRuntimeRequest>(request);
+    const existing = await service.get(startRequest.session_id);
+    if (existing?.status === 'error') {
+      await service.stop(existing.runtime_id);
+    }
+    const runtime = await service.start(startRequest);
     sendJson(response, 201, runtime);
     return;
   }
