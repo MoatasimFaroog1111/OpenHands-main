@@ -88,15 +88,20 @@ jobs:
             tests/unit/app_server/test_session_auth_critical_paths.py \
             tests/unit/app_server/test_auth_user_context_critical_paths.py \
             tests/unit/app_server/test_config_runtime_selection.py \
+            tests/unit/app_server/test_config_event_service_selection.py \
+            tests/unit/app_server/test_composition_factories.py \
             tests/unit/app_server/test_conversation_hook_loader.py \
             --cov=openhands.app_server.sandbox.runtime_security \
             --cov=openhands.app_server.sandbox.session_auth \
             --cov=openhands.app_server.user.auth_user_context \
             --cov=openhands.app_server.config \
+            --cov=openhands.app_server.composition.llm_event_factories \
+            --cov=openhands.app_server.composition.sandbox_factories \
+            --cov=openhands.app_server.composition.app_service_factories \
             --cov=openhands.app_server.app_conversation.hook_loader \
             --cov-branch \
             --cov-report=term-missing \
-            --cov-fail-under=70
+            --cov-fail-under=75
         env:
           COVERAGE_FILE: ".coverage.critical.${{ matrix['python-version'] }}"
       - name: Store critical coverage file

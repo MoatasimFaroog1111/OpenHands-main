@@ -1,4 +1,4 @@
-"""Configuration for the OpenHands App Server."""
+"""Configuration facade for the OpenHands App Server."""
 
 import os
 from pathlib import Path
@@ -6,7 +6,7 @@ from typing import AsyncContextManager
 
 import httpx
 from fastapi import Depends, Request
-from pydantic import Field, SecretStr
+from pydantic import Field
 
 # Import the event_callback module to ensure all processors are registered
 import openhands.app_server.event_callback  # noqa: F401
@@ -26,6 +26,23 @@ from openhands.app_server.app_conversation.app_conversation_start_task_service i
 from openhands.app_server.app_lifespan.app_lifespan_service import AppLifespanService
 from openhands.app_server.app_lifespan.oss_app_lifespan_service import (
     OssAppLifespanService,
+)
+from openhands.app_server.composition.app_service_factories import (
+    create_default_app_conversation_info_injector,
+    create_default_app_conversation_injector,
+    create_default_app_conversation_start_task_injector,
+    create_default_jwt_service_injector,
+    create_default_pending_message_injector,
+    create_default_user_context_injector,
+)
+from openhands.app_server.composition.llm_event_factories import (
+    create_default_event_callback_service_injector,
+    create_default_event_service_injector,
+    create_default_llm_model_service_injector,
+)
+from openhands.app_server.composition.sandbox_factories import (
+    create_default_sandbox_service_injector,
+    create_default_sandbox_spec_service_injector,
 )
 from openhands.app_server.config_api.config_models import AppMode
 from openhands.app_server.config_api.llm_model_service import (
@@ -55,14 +72,11 @@ from openhands.app_server.services.db_session import (  # noqa: F401  (re-export
     depends_db_session,
     get_db_session,
 )
-from openhands.app_server.services.db_session_injector import (
-    DbSessionInjector,
-)
+from openhands.app_server.services.db_session_injector import DbSessionInjector
 from openhands.app_server.services.httpx_client_injector import HttpxClientInjector
 from openhands.app_server.services.injector import InjectorState
 from openhands.app_server.services.jwt_service import JwtService, JwtServiceInjector
 from openhands.app_server.user.user_context import UserContext, UserContextInjector
-from openhands.app_server.utils.environment import StorageProvider, get_storage_provider
 from openhands.app_server.web_client.default_web_client_config_injector import (
     DefaultWebClientConfigInjector,
 )
@@ -151,7 +165,7 @@ def resolve_provider_llm_base_url(
     Args:
         model: LLM model name (e.g. ``openhands/gpt-5.5``).
         base_url: The base URL from user/org settings.
-        provider_base_url: Deployment provider URL.  Falls back to
+        provider_base_url: Deployment provider URL. Falls back to
             ``get_openhands_provider_base_url()`` when *None*.
     """
     if not model or not model.startswith('openhands/'):
@@ -238,184 +252,33 @@ class AppServerConfig(OpenHandsModel):
 
 
 def config_from_env() -> AppServerConfig:
-    # Import defaults...
-    from openhands.app_server.app_conversation.live_status_app_conversation_service import (  # noqa: E501
-        LiveStatusAppConversationServiceInjector,
-    )
-    from openhands.app_server.app_conversation.sql_app_conversation_info_service import (  # noqa: E501
-        SQLAppConversationInfoServiceInjector,
-    )
-    from openhands.app_server.app_conversation.sql_app_conversation_start_task_service import (  # noqa: E501
-        SQLAppConversationStartTaskServiceInjector,
-    )
-    from openhands.app_server.event.aws_event_service import (
-        AwsEventServiceInjector,
-    )
-    from openhands.app_server.event.filesystem_event_service import (
-        FilesystemEventServiceInjector,
-    )
-    from openhands.app_server.event.google_cloud_event_service import (
-        GoogleCloudEventServiceInjector,
-    )
-    from openhands.app_server.event_callback.sql_event_callback_service import (
-        SQLEventCallbackServiceInjector,
-    )
-    from openhands.app_server.sandbox.docker_sandbox_service import (
-        DockerSandboxServiceInjector,
-    )
-    from openhands.app_server.sandbox.docker_sandbox_spec_service import (
-        DockerSandboxSpecServiceInjector,
-    )
-    from openhands.app_server.sandbox.process_sandbox_service import (
-        ProcessSandboxServiceInjector,
-    )
-    from openhands.app_server.sandbox.process_sandbox_spec_service import (
-        ProcessSandboxSpecServiceInjector,
-    )
-    from openhands.app_server.sandbox.remote_sandbox_service import (
-        RemoteSandboxServiceInjector,
-    )
-    from openhands.app_server.sandbox.remote_sandbox_spec_service import (
-        RemoteSandboxSpecServiceInjector,
-    )
-    from openhands.app_server.user.auth_user_context import (
-        AuthUserContextInjector,
-    )
-
+    """Load app-server settings, then compose any dependency defaults."""
     config: AppServerConfig = from_env(AppServerConfig, 'OH')  # type: ignore
 
     if config.llm_model is None:
-        from openhands.app_server.config_api.default_llm_model_service import (
-            DefaultLLMModelServiceInjector,
-        )
-
-        llm_model_kwargs: dict = {}
-        aws_region = os.getenv('AWS_REGION_NAME')
-        aws_key = os.getenv('AWS_ACCESS_KEY_ID')
-        aws_secret = os.getenv('AWS_SECRET_ACCESS_KEY')
-        if aws_region and aws_key and aws_secret:
-            llm_model_kwargs['aws_region_name'] = aws_region
-            llm_model_kwargs['aws_access_key_id'] = SecretStr(aws_key)
-            llm_model_kwargs['aws_secret_access_key'] = SecretStr(aws_secret)
-
-        ollama_url = os.getenv('OLLAMA_BASE_URL')
-        if ollama_url:
-            llm_model_kwargs['ollama_base_url'] = ollama_url
-
-        config.llm_model = DefaultLLMModelServiceInjector(**llm_model_kwargs)
-
+        config.llm_model = create_default_llm_model_service_injector()
     if config.event is None:
-        provider = get_storage_provider()
-
-        if provider == StorageProvider.AWS:
-            # AWS S3 storage configuration
-            bucket_name = os.environ.get('FILE_STORE_PATH')
-            if not bucket_name:
-                raise ValueError(
-                    'FILE_STORE_PATH environment variable is required for S3 storage'
-                )
-            config.event = AwsEventServiceInjector(bucket_name=bucket_name)
-        elif provider == StorageProvider.GCP:
-            # Google Cloud storage configuration
-            bucket_name = os.environ.get('FILE_STORE_PATH')
-            if not bucket_name:
-                raise ValueError(
-                    'FILE_STORE_PATH environment variable is required for Google Cloud storage'
-                )
-            config.event = GoogleCloudEventServiceInjector(bucket_name=bucket_name)
-        else:
-            config.event = FilesystemEventServiceInjector()
-
+        config.event = create_default_event_service_injector()
     if config.event_callback is None:
-        config.event_callback = SQLEventCallbackServiceInjector()
-
+        config.event_callback = create_default_event_callback_service_injector()
     if config.sandbox is None:
-        # Legacy fallback
-        if os.getenv('RUNTIME') == 'remote':
-            config.sandbox = RemoteSandboxServiceInjector(
-                api_key=os.environ['SANDBOX_API_KEY'],
-                api_url=os.environ['SANDBOX_REMOTE_RUNTIME_API_URL'],
-            )
-        elif os.getenv('RUNTIME') in ('local', 'process'):
-            config.sandbox = ProcessSandboxServiceInjector()
-        else:
-            # Support legacy environment variables for Docker sandbox configuration
-            docker_sandbox_kwargs: dict = {}
-            if os.getenv('SANDBOX_HOST_PORT'):
-                docker_sandbox_kwargs['host_port'] = int(
-                    os.environ['SANDBOX_HOST_PORT']
-                )
-            if os.getenv('SANDBOX_CONTAINER_URL_PATTERN'):
-                docker_sandbox_kwargs['container_url_pattern'] = os.environ[
-                    'SANDBOX_CONTAINER_URL_PATTERN'
-                ]
-            # Allow configuring sandbox startup grace period
-            # This is useful for slower machines or cloud environments where
-            # the agent-server container takes longer to initialize
-            if os.getenv('SANDBOX_STARTUP_GRACE_SECONDS'):
-                docker_sandbox_kwargs['startup_grace_seconds'] = int(
-                    os.environ['SANDBOX_STARTUP_GRACE_SECONDS']
-                )
-            # Parse SANDBOX_VOLUMES and convert to VolumeMount objects
-            # This is set by the CLI's --mount-cwd flag
-            sandbox_volumes = os.getenv('SANDBOX_VOLUMES')
-            if sandbox_volumes:
-                from openhands.app_server.sandbox.docker_sandbox_service import (
-                    VolumeMount,
-                )
-
-                mounts = []
-                for mount_spec in sandbox_volumes.split(','):
-                    mount_spec = mount_spec.strip()
-                    if not mount_spec:
-                        continue
-                    parts = mount_spec.split(':')
-                    if len(parts) >= 2:
-                        host_path = parts[0]
-                        container_path = parts[1]
-                        mode = parts[2] if len(parts) > 2 else 'rw'
-                        mounts.append(
-                            VolumeMount(
-                                host_path=host_path,
-                                container_path=container_path,
-                                mode=mode,
-                            )
-                        )
-                if mounts:
-                    docker_sandbox_kwargs['mounts'] = mounts
-            config.sandbox = DockerSandboxServiceInjector(**docker_sandbox_kwargs)
-
+        config.sandbox = create_default_sandbox_service_injector()
     if config.sandbox_spec is None:
-        if os.getenv('RUNTIME') == 'remote':
-            config.sandbox_spec = RemoteSandboxSpecServiceInjector()
-        elif os.getenv('RUNTIME') in ('local', 'process'):
-            config.sandbox_spec = ProcessSandboxSpecServiceInjector()
-        else:
-            config.sandbox_spec = DockerSandboxSpecServiceInjector()
-
+        config.sandbox_spec = create_default_sandbox_spec_service_injector()
     if config.app_conversation_info is None:
-        config.app_conversation_info = SQLAppConversationInfoServiceInjector()
-
+        config.app_conversation_info = create_default_app_conversation_info_injector()
     if config.app_conversation_start_task is None:
         config.app_conversation_start_task = (
-            SQLAppConversationStartTaskServiceInjector()
+            create_default_app_conversation_start_task_injector()
         )
-
     if config.app_conversation is None:
-        config.app_conversation = LiveStatusAppConversationServiceInjector()
-
+        config.app_conversation = create_default_app_conversation_injector()
     if config.pending_message is None:
-        from openhands.app_server.pending_messages.pending_message_service import (
-            SQLPendingMessageServiceInjector,
-        )
-
-        config.pending_message = SQLPendingMessageServiceInjector()
-
+        config.pending_message = create_default_pending_message_injector()
     if config.user is None:
-        config.user = AuthUserContextInjector()
-
+        config.user = create_default_user_context_injector()
     if config.jwt is None:
-        config.jwt = JwtServiceInjector(persistence_dir=config.persistence_dir)
+        config.jwt = create_default_jwt_service_injector(config.persistence_dir)
 
     return config
 
