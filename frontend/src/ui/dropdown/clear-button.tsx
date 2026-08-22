@@ -1,4 +1,4 @@
-import { X } from "lucide-react";
+import { ClearButton as SharedClearButton } from "#/ui/clear-button";
 
 interface ClearButtonProps {
   onClear: () => void;
@@ -6,14 +6,9 @@ interface ClearButtonProps {
 
 export function ClearButton({ onClear }: ClearButtonProps) {
   return (
-    <button
-      type="button"
-      data-testid="dropdown-clear"
-      onClick={onClear}
-      aria-label="Clear selection"
+    <SharedClearButton
+      onClear={onClear}
       className="text-white hover:text-gray-300"
-    >
-      <X size={14} />
-    </button>
+    />
   );
 }
