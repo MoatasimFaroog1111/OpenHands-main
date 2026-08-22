@@ -14,7 +14,7 @@ def main():
     log_config = get_uvicorn_log_config()
 
     uvicorn.run(
-        'openhands.server.listen:app',
+        'openhands.app_server.app:app',
         host='0.0.0.0',
         port=int(os.environ.get('port') or '3000'),
         log_level='debug' if os.environ.get('DEBUG') else 'info',
