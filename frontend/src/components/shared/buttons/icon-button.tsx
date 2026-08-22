@@ -1,5 +1,5 @@
-import { Button } from "@heroui/react";
 import React, { ReactElement } from "react";
+import { Button } from "#/ui/button";
 
 export interface IconButtonProps {
   icon: ReactElement;
@@ -17,11 +17,11 @@ export function IconButton({
   return (
     <Button
       type="button"
-      variant="flat"
-      onPress={onClick}
+      appearance="subtle"
+      onClick={onClick}
       className="cursor-pointer text-[12px] bg-transparent aspect-square px-0 min-w-[20px] h-[20px]"
-      aria-label={ariaLabel}
-      data-testid={testId}
+      ariaLabel={ariaLabel}
+      testId={testId}
     >
       {icon}
     </Button>
