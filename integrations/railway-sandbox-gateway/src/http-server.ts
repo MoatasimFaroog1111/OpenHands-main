@@ -8,11 +8,12 @@ import type { RuntimeService } from './runtime-service.js';
 import type { StartRuntimeRequest } from './types.js';
 
 const MAX_BODY_BYTES = 1_048_576;
+type ProxyServer = ReturnType<typeof httpProxy.createProxyServer>;
 
 export function createGatewayServer(service: RuntimeService, apiKey: string) {
   const proxy = httpProxy.createProxyServer({ ws: true, xfwd: true });
   proxy.on('error', (_error, _req, response) => {
-    if ('writeHead' in response && !response.headersSent) {
+    if (response && 'writeHead' in response && !response.headersSent) {
       response.writeHead(502, { 'content-type': 'application/json' });
       response.end(JSON.stringify({ error: 'sandbox proxy unavailable' }));
     }
@@ -23,7 +24,7 @@ export function createGatewayServer(service: RuntimeService, apiKey: string) {
   });
 
   server.on('upgrade', (request, socket, head) => {
-    void handleUpgrade(service, proxy, request, socket, head);
+    void handleUpgrade(service, proxy, request, socket as Socket, head);
   });
 
   return server;
@@ -31,7 +32,7 @@ export function createGatewayServer(service: RuntimeService, apiKey: string) {
 
 async function handleHttp(
   service: RuntimeService,
-  proxy: httpProxy,
+  proxy: ProxyServer,
   apiKey: string,
   request: IncomingMessage,
   response: ServerResponse,
@@ -93,7 +94,11 @@ async function handleControl(
   if (request.method === 'POST' && url.pathname === '/pause') {
     const body = await readJson<{ runtime_id: string }>(request);
     const ok = await service.pause(body.runtime_id);
-    sendJson(response, ok ? 200 : 404, ok ? { status: 'paused' } : { error: 'runtime not found' });
+    sendJson(
+      response,
+      ok ? 200 : 404,
+      ok ? { status: 'paused' } : { error: 'runtime not found' },
+    );
     return;
   }
   if (request.method === 'POST' && url.pathname === '/resume') {
@@ -106,7 +111,11 @@ async function handleControl(
   if (request.method === 'POST' && url.pathname === '/stop') {
     const body = await readJson<{ runtime_id: string }>(request);
     const ok = await service.stop(body.runtime_id);
-    sendJson(response, ok ? 200 : 404, ok ? { status: 'stopped' } : { error: 'runtime not found' });
+    sendJson(
+      response,
+      ok ? 200 : 404,
+      ok ? { status: 'stopped' } : { error: 'runtime not found' },
+    );
     return;
   }
   sendJson(response, 404, { error: 'not found' });
@@ -114,7 +123,7 @@ async function handleControl(
 
 async function handleUpgrade(
   service: RuntimeService,
-  proxy: httpProxy,
+  proxy: ProxyServer,
   request: IncomingMessage,
   socket: Socket,
   head: Buffer,
@@ -177,6 +186,7 @@ function sendJson(response: ServerResponse, status: number, body: unknown): void
 }
 
 function statusForError(error: unknown): number {
+  if (error instanceof SyntaxError) return 400;
   const message = errorMessage(error);
   if (message.includes('already exists')) return 409;
   if (
@@ -184,7 +194,8 @@ function statusForError(error: unknown): number {
     message.includes('must ') ||
     message.includes('invalid ') ||
     message.includes('unsupported') ||
-    message.includes('collides')
+    message.includes('collides') ||
+    message.includes('too large')
   ) {
     return 400;
   }

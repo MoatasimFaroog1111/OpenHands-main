@@ -108,6 +108,27 @@ export class RuntimeService {
       .map((record) => this.#toView(record));
   }
 
+  async keepAlive(): Promise<{ checked: number; failed: string[] }> {
+    const records = (await this.#registry.list()).filter(
+      (record) => record.status === 'running' && record.sandboxId,
+    );
+    const failed: string[] = [];
+    for (const record of records) {
+      try {
+        const sandbox = await this.#platform.connect(record.sandboxId!);
+        const result = await sandbox.exec('true', { timeoutSec: 10 });
+        ensureExecSuccess(result, 'keep Railway sandbox active');
+      } catch (error) {
+        record.status = 'error';
+        record.lastError = `sandbox keepalive failed: ${errorMessage(error)}`;
+        record.updatedAt = new Date().toISOString();
+        await this.#registry.save(record);
+        failed.push(record.sessionId);
+      }
+    }
+    return { checked: records.length, failed };
+  }
+
   async pause(runtimeId: string): Promise<boolean> {
     const record = await this.#findByRuntimeId(runtimeId);
     if (!record) return false;
@@ -224,8 +245,8 @@ export class RuntimeService {
 
   async #launchRuntime(sandbox: PlatformSandbox, record: RuntimeRecord): Promise<void> {
     const request = record.request;
-    const uid = request.run_as_user ?? 10001;
-    const gid = request.run_as_group ?? 10001;
+    const uid = positiveId(request.run_as_user, 10001, 'run_as_user');
+    const gid = positiveId(request.run_as_group, 10001, 'run_as_group');
     const workingDir = request.working_dir || '/workspace';
     const env = {
       ...(request.environment || {}),
@@ -281,7 +302,9 @@ export class RuntimeService {
       if (await this.#probe(url)) return;
       await new Promise((resolve) => setTimeout(resolve, 1_000));
     }
-    throw new Error(`agent-server did not become healthy within ${this.#config.startupTimeoutMs}ms`);
+    throw new Error(
+      `agent-server did not become healthy within ${this.#config.startupTimeoutMs}ms`,
+    );
   }
 
   #sessionKey(record: RuntimeRecord): string {
@@ -315,16 +338,34 @@ async function defaultHealthProbe(url: string): Promise<boolean> {
 }
 
 function validateStartRequest(request: StartRuntimeRequest): void {
+  if (!request || typeof request !== 'object') {
+    throw new Error('start request must be an object');
+  }
   if (!/^[A-Za-z0-9_-]{1,128}$/.test(request.session_id)) {
     throw new Error('session_id must contain only letters, numbers, underscore, or dash');
   }
   if (CONTROL_PATHS.has(request.session_id)) {
     throw new Error('session_id collides with a reserved gateway route');
   }
-  if (!request.image?.trim()) throw new Error('image is required');
-  if (!Array.isArray(request.command) || request.command.length === 0) {
-    throw new Error('command must contain at least one argument');
+  if (typeof request.image !== 'string' || !request.image.trim()) {
+    throw new Error('image is required');
   }
+  if (
+    !Array.isArray(request.command) ||
+    request.command.length === 0 ||
+    request.command.some((argument) => typeof argument !== 'string')
+  ) {
+    throw new Error('command must contain string arguments');
+  }
+  positiveId(request.run_as_user, 10001, 'run_as_user');
+  positiveId(request.run_as_group, 10001, 'run_as_group');
+  if (
+    request.environment !== undefined &&
+    (request.environment === null || Array.isArray(request.environment) || typeof request.environment !== 'object')
+  ) {
+    throw new Error('environment must be an object');
+  }
+  validateEnvironment(request.environment || {});
 }
 
 function validateEnvironment(environment: Record<string, string>): void {
@@ -332,10 +373,23 @@ function validateEnvironment(environment: Record<string, string>): void {
     if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
       throw new Error(`invalid environment variable name: ${key}`);
     }
+    if (typeof value !== 'string') {
+      throw new Error(`environment variable ${key} must be a string`);
+    }
     if (value.includes('\n') || value.includes('\0')) {
-      throw new Error(`environment variable ${key} contains an unsupported newline or NUL`);
+      throw new Error(
+        `environment variable ${key} contains an unsupported newline or NUL`,
+      );
     }
   }
+}
+
+function positiveId(value: number | undefined, fallback: number, name: string): number {
+  const resolved = value ?? fallback;
+  if (!Number.isInteger(resolved) || resolved <= 0 || resolved > 2_147_483_647) {
+    throw new Error(`${name} must be a positive integer`);
+  }
+  return resolved;
 }
 
 function shellQuote(value: string): string {
@@ -346,7 +400,10 @@ function checkpointNameFor(sessionId: string): string {
   return `oh-${sessionId.slice(0, 24)}-${Date.now().toString(36)}`;
 }
 
-function ensureExecSuccess(result: { exitCode: number | null; stderr: string }, action: string): void {
+function ensureExecSuccess(
+  result: { exitCode: number | null; stderr: string },
+  action: string,
+): void {
   if (result.exitCode !== 0) {
     throw new Error(`${action} failed (${result.exitCode}): ${result.stderr}`);
   }

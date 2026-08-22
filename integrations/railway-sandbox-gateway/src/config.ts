@@ -6,11 +6,20 @@ export interface GatewayConfig {
   port: number;
   startupTimeoutMs: number;
   idleTimeoutMinutes: number;
+  keepAliveSeconds: number;
 }
 
 function required(name: string): string {
   const value = process.env[name]?.trim();
   if (!value) throw new Error(`${name} is required`);
+  return value;
+}
+
+function requiredSecret(name: string): string {
+  const value = required(name);
+  if (value.length < 32) {
+    throw new Error(`${name} must be at least 32 characters`);
+  }
   return value;
 }
 
@@ -49,8 +58,16 @@ export function loadConfig(): GatewayConfig {
     );
   }
 
+  const idleTimeoutMinutes = positiveInt('SANDBOX_IDLE_TIMEOUT_MINUTES', 60);
+  const keepAliveSeconds = positiveInt('SANDBOX_KEEPALIVE_SECONDS', 240);
+  if (keepAliveSeconds >= idleTimeoutMinutes * 60) {
+    throw new Error(
+      'SANDBOX_KEEPALIVE_SECONDS must be shorter than SANDBOX_IDLE_TIMEOUT_MINUTES',
+    );
+  }
+
   return {
-    apiKey: required('GATEWAY_API_KEY'),
+    apiKey: requiredSecret('GATEWAY_API_KEY'),
     publicBaseUrl: normalizePublicBaseUrl(publicBaseUrl),
     railwayEnvironmentId: required('RAILWAY_ENVIRONMENT_ID'),
     registryPath:
@@ -58,6 +75,7 @@ export function loadConfig(): GatewayConfig {
       '/data/railway-sandbox-gateway/runtimes.json',
     port: positiveInt('PORT', 8080),
     startupTimeoutMs: positiveInt('SANDBOX_STARTUP_TIMEOUT_MS', 120_000),
-    idleTimeoutMinutes: positiveInt('SANDBOX_IDLE_TIMEOUT_MINUTES', 60),
+    idleTimeoutMinutes,
+    keepAliveSeconds,
   };
 }

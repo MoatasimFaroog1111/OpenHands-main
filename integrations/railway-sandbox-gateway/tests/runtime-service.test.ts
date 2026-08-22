@@ -63,13 +63,14 @@ class FakePlatform implements SandboxPlatform {
 }
 
 const config: GatewayConfig = {
-  apiKey: 'gateway-secret',
+  apiKey: 'gateway-secret-that-is-at-least-32-characters',
   publicBaseUrl: 'https://gateway.example.com',
   railwayEnvironmentId: 'env-test',
   registryPath: '/tmp/not-used',
   port: 8080,
   startupTimeoutMs: 5_000,
   idleTimeoutMinutes: 60,
+  keepAliveSeconds: 240,
 };
 
 const request: StartRuntimeRequest = {
@@ -89,7 +90,7 @@ test('parsePrivateIpv6 extracts Railway ULA address', () => {
   );
 });
 
-test('start, pause, resume and stop preserve the remote runtime contract', async () => {
+test('start, keepalive, pause, resume and stop preserve the remote runtime contract', async () => {
   const registry = new MemoryRegistry();
   const platform = new FakePlatform();
   const service = new RuntimeService(config, registry, platform, async () => true);
@@ -102,6 +103,10 @@ test('start, pause, resume and stop preserve the remote runtime contract', async
   assert.match(platform.created[0].commands.join('\n'), /docker run -d/);
   const envFile = [...platform.created[0].files.values()][0];
   assert.match(envFile, /OH_SESSION_API_KEYS_0=/);
+
+  const keepalive = await service.keepAlive();
+  assert.deepEqual(keepalive, { checked: 1, failed: [] });
+  assert.ok(platform.created[0].commands.includes('true'));
 
   assert.equal(await service.pause(started.runtime_id), true);
   const paused = await service.get(request.session_id);

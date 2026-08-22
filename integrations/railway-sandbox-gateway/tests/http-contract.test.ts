@@ -39,13 +39,14 @@ class PlatformStub implements SandboxPlatform {
 }
 
 const config: GatewayConfig = {
-  apiKey: 'control-secret',
+  apiKey: 'control-secret-that-is-at-least-32-characters',
   publicBaseUrl: 'https://gateway.example.com',
   railwayEnvironmentId: 'env-test',
   registryPath: '/tmp/not-used',
   port: 8080,
   startupTimeoutMs: 5_000,
   idleTimeoutMinutes: 60,
+  keepAliveSeconds: 240,
 };
 
 const body: StartRuntimeRequest = {
