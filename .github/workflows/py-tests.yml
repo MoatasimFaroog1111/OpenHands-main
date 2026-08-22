@@ -89,6 +89,7 @@ jobs:
             tests/unit/app_server/test_auth_user_context_critical_paths.py \
             tests/unit/app_server/test_config_runtime_selection.py \
             tests/unit/app_server/test_config_event_service_selection.py \
+            tests/unit/app_server/test_composition_factories.py \
             tests/unit/app_server/test_conversation_hook_loader.py \
             --cov=openhands.app_server.sandbox.runtime_security \
             --cov=openhands.app_server.sandbox.session_auth \
