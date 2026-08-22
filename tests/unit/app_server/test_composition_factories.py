@@ -27,8 +27,7 @@ def test_docker_factory_preserves_legacy_runtime_options_and_volume_mounts() -> 
         'SANDBOX_CONTAINER_URL_PATTERN': 'https://sandbox.example/{port}',
         'SANDBOX_STARTUP_GRACE_SECONDS': '45',
         'SANDBOX_VOLUMES': (
-            '/host/project:/workspace/project:ro, ,invalid,'
-            '/host/cache:/workspace/cache'
+            '/host/project:/workspace/project:ro, ,invalid,/host/cache:/workspace/cache'
         ),
     }
 
@@ -39,14 +38,18 @@ def test_docker_factory_preserves_legacy_runtime_options_and_volume_mounts() -> 
     assert injector.host_port == 4321
     assert injector.container_url_pattern == 'https://sandbox.example/{port}'
     assert injector.startup_grace_seconds == 45
-    assert [(mount.host_path, mount.container_path, mount.mode) for mount in injector.mounts] == [
+    assert [
+        (mount.host_path, mount.container_path, mount.mode) for mount in injector.mounts
+    ] == [
         ('/host/project', '/workspace/project', 'ro'),
         ('/host/cache', '/workspace/cache', 'rw'),
     ]
 
 
 def test_docker_factory_ignores_volume_specs_without_container_path() -> None:
-    with patch.dict(os.environ, {'SANDBOX_VOLUMES': 'invalid, ,also-invalid'}, clear=True):
+    with patch.dict(
+        os.environ, {'SANDBOX_VOLUMES': 'invalid, ,also-invalid'}, clear=True
+    ):
         injector = create_default_sandbox_service_injector()
 
     assert isinstance(injector, DockerSandboxServiceInjector)
@@ -74,11 +77,14 @@ def test_llm_factory_preserves_aws_and_ollama_environment_settings() -> None:
 
 
 def test_gcp_event_factory_requires_bucket_path() -> None:
-    with patch.dict(
-        os.environ,
-        {'SHARED_EVENT_STORAGE_PROVIDER': 'gcp'},
-        clear=True,
-    ), pytest.raises(ValueError, match='FILE_STORE_PATH.*Google Cloud'):
+    with (
+        patch.dict(
+            os.environ,
+            {'SHARED_EVENT_STORAGE_PROVIDER': 'gcp'},
+            clear=True,
+        ),
+        pytest.raises(ValueError, match='FILE_STORE_PATH.*Google Cloud'),
+    ):
         create_default_event_service_injector()
 
 
