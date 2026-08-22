@@ -1,4 +1,4 @@
-import { Tooltip } from "@heroui/react";
+import { Tooltip } from "#/components/design-system";
 
 interface TrajectoryActionButtonProps {
   testId?: string;
@@ -28,7 +28,7 @@ export function TrajectoryActionButton({
     return (
       <Tooltip
         content={tooltip}
-        closeDelay={100}
+        hideDelayMs={100}
         className="bg-white text-black hover:bg-transparent"
       >
         {button}
