@@ -22,6 +22,7 @@ _HOSTED_ENV_MARKERS = (
     'K_SERVICE',
     'DYNO',
 )
+_RAILWAY_ENV_MARKERS = ('RAILWAY_PUBLIC_DOMAIN', 'RAILWAY_ENVIRONMENT')
 
 
 def _is_truthy(value: str | None) -> bool:
@@ -91,6 +92,30 @@ def is_hosted_deployment(environ: Mapping[str, str] | None = None) -> bool:
     return False
 
 
+def is_railway_deployment(environ: Mapping[str, str] | None = None) -> bool:
+    """Return whether the process is running in a Railway deployment."""
+
+    env = os.environ if environ is None else environ
+    return any(env.get(key) for key in _RAILWAY_ENV_MARKERS)
+
+
+def _validate_remote_runtime_configuration(env: Mapping[str, str]) -> None:
+    api_url = (env.get('SANDBOX_REMOTE_RUNTIME_API_URL') or '').strip()
+    api_key = (env.get('SANDBOX_API_KEY') or '').strip()
+
+    if not api_url or not api_key:
+        raise RuntimeError(
+            'Hosted RUNTIME=remote requires both '
+            'SANDBOX_REMOTE_RUNTIME_API_URL and SANDBOX_API_KEY.'
+        )
+
+    if _is_loopback_host(_host_from_value(api_url)):
+        raise RuntimeError(
+            'Hosted RUNTIME=remote requires a non-loopback remote runtime API URL. '
+            'The sandbox execution boundary must be outside the application host.'
+        )
+
+
 def validate_runtime_security(
     environ: Mapping[str, str] | None = None,
     *,
@@ -101,19 +126,23 @@ def validate_runtime_security(
     Rules:
     - Hosted deployments may not use ``local`` or ``process`` sandboxes because
       those execute agent code inside the application container.
+    - Railway deployments must use ``remote`` because the platform does not
+      expose the Docker isolation boundary expected by DockerSandboxService.
+    - Hosted remote runtimes require an authenticated, non-loopback runtime API.
     - Hosted deployments may not run the application as root.
     - ``RUNTIME=process`` outside a hosted deployment requires an explicit local
       development opt-in, making the unsafe boundary impossible to select by
       accident.
 
-    Docker and remote runtimes remain valid hosted options because the agent code
-    executes outside the app process/container boundary. Docker deployments still
+    Docker and remote runtimes remain valid for generic hosted environments when
+    the infrastructure provides the required isolation. Docker deployments still
     need the usual Docker daemon/socket hardening at the infrastructure layer.
     """
 
     env = os.environ if environ is None else environ
     runtime = env.get('RUNTIME', 'docker').strip().lower() or 'docker'
     hosted = is_hosted_deployment(env)
+    railway = is_railway_deployment(env)
 
     if hosted and runtime in {'local', 'process'}:
         raise RuntimeError(
@@ -121,6 +150,12 @@ def validate_runtime_security(
             f'RUNTIME={runtime!r}. Configure RUNTIME=remote with '
             'SANDBOX_REMOTE_RUNTIME_API_URL/SANDBOX_API_KEY, or use an isolated '
             'Docker sandbox deployment.'
+        )
+
+    if railway and runtime != 'remote':
+        raise RuntimeError(
+            'Railway deployments require RUNTIME=remote. Railway does not provide '
+            'the Docker socket/isolation boundary required by the Docker sandbox.'
         )
 
     if (
@@ -157,6 +192,9 @@ def validate_runtime_security(
             'Unsafe application user: hosted OpenHands deployments must not run '
             'the app server as root. Set SANDBOX_USER_ID to a non-zero UID.'
         )
+
+    if runtime == 'remote':
+        _validate_remote_runtime_configuration(env)
 
 
 def main() -> None:
