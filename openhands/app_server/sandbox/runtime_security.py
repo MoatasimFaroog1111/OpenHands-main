@@ -123,8 +123,10 @@ def validate_runtime_security(
             'Docker sandbox deployment.'
         )
 
-    if runtime == 'process' and not hosted and not _is_truthy(
-        env.get(_INSECURE_PROCESS_OVERRIDE)
+    if (
+        runtime == 'process'
+        and not hosted
+        and not _is_truthy(env.get(_INSECURE_PROCESS_OVERRIDE))
     ):
         raise RuntimeError(
             'RUNTIME=process shares the OpenHands application container. It is '
