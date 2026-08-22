@@ -1,0 +1,163 @@
+name: Railway Deployment Contract
+
+on:
+  pull_request:
+    paths:
+      - "Dockerfile"
+      - "railway.json"
+      - "containers/app/entrypoint.sh"
+      - "openhands/app_server/sandbox/runtime_security.py"
+      - "tests/unit/app_server/test_runtime_security.py"
+      - "docs/RAILWAY_DEPLOYMENT.md"
+      - ".github/workflows/railway-deployment-contract.yml"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  railway-contract:
+    name: Safe Railway image startup
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Validate deployment files
+        run: |
+          set -euo pipefail
+          python -m json.tool railway.json >/dev/null
+          bash -n containers/app/entrypoint.sh
+
+      - name: Build Railway image
+        run: |
+          set -euo pipefail
+          docker build \
+            --file Dockerfile \
+            --tag openhands-railway-contract:${GITHUB_SHA} \
+            .
+
+      - name: Reject process sandbox on Railway
+        run: |
+          set -euo pipefail
+          image="openhands-railway-contract:${GITHUB_SHA}"
+
+          if docker run --rm \
+            -e RAILWAY_ENVIRONMENT=ci \
+            -e RUNTIME=process \
+            -e SANDBOX_USER_ID=42421 \
+            "$image" true; then
+            echo "Railway process sandbox unexpectedly passed the security gate"
+            exit 1
+          fi
+
+      - name: Reject loopback remote runtime on Railway
+        run: |
+          set -euo pipefail
+          image="openhands-railway-contract:${GITHUB_SHA}"
+
+          if docker run --rm \
+            -e RAILWAY_ENVIRONMENT=ci \
+            -e RUNTIME=remote \
+            -e SANDBOX_USER_ID=42421 \
+            -e SANDBOX_REMOTE_RUNTIME_API_URL=http://127.0.0.1:9000 \
+            -e SANDBOX_API_KEY=ci-runtime-key \
+            "$image" true; then
+            echo "Railway loopback remote runtime unexpectedly passed the security gate"
+            exit 1
+          fi
+
+      - name: Start Railway-style app container
+        run: |
+          set -euo pipefail
+          image="openhands-railway-contract:${GITHUB_SHA}"
+
+          docker volume create openhands-railway-contract-data >/dev/null
+
+          docker run -d \
+            --name openhands-railway-contract \
+            -p 127.0.0.1:3000:3000 \
+            -e PORT=3000 \
+            -e RAILWAY_ENVIRONMENT=ci \
+            -e RAILWAY_PUBLIC_DOMAIN=openhands.example.test \
+            -e RAILWAY_VOLUME_MOUNT_PATH=/data \
+            -e RUNTIME=remote \
+            -e SANDBOX_USER_ID=42421 \
+            -e SANDBOX_REMOTE_RUNTIME_API_URL=https://runtime.example.test \
+            -e SANDBOX_API_KEY=ci-runtime-key \
+            -v openhands-railway-contract-data:/data \
+            "$image"
+
+      - name: Verify app health and privilege drop
+        run: |
+          set -euo pipefail
+
+          healthy=false
+          for attempt in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:3000/ >/dev/null; then
+              healthy=true
+              break
+            fi
+            sleep 2
+          done
+
+          if [[ "$healthy" != "true" ]]; then
+            docker logs openhands-railway-contract
+            exit 1
+          fi
+
+          docker exec openhands-railway-contract python - <<'PY'
+          from pathlib import Path
+
+          candidates = []
+          for proc in Path('/proc').iterdir():
+              if not proc.name.isdigit():
+                  continue
+              try:
+                  cmdline = (proc / 'cmdline').read_bytes().replace(b'\0', b' ')
+              except (FileNotFoundError, PermissionError, ProcessLookupError):
+                  continue
+              if b'uvicorn' in cmdline and b'openhands.app_server.app:app' in cmdline:
+                  candidates.append(proc)
+
+          if not candidates:
+              raise SystemExit('Could not find the OpenHands Uvicorn process')
+
+          status = (candidates[0] / 'status').read_text(encoding='utf-8')
+          uid_line = next(line for line in status.splitlines() if line.startswith('Uid:'))
+          effective_uid = int(uid_line.split()[2])
+          if effective_uid == 0:
+              raise SystemExit('OpenHands Uvicorn process is running as root')
+
+          environ = (candidates[0] / 'environ').read_bytes().split(b'\0')
+          env = {}
+          for item in environ:
+              if b'=' in item:
+                  key, value = item.split(b'=', 1)
+                  env[key.decode()] = value.decode(errors='replace')
+
+          assert env['OH_WEB_URL'] == 'https://openhands.example.test'
+          assert env['OH_PERMITTED_CORS_ORIGINS_0'] == 'https://openhands.example.test'
+          assert env['OH_PERSISTENCE_DIR'] == '/data/.openhands'
+          assert env['FILE_STORE_PATH'] == '/data/.openhands'
+          print(f'OpenHands Uvicorn effective UID: {effective_uid}')
+          PY
+
+          docker exec --user 42421 openhands-railway-contract \
+            sh -c 'touch /data/.openhands/.railway-write-test && rm /data/.openhands/.railway-write-test'
+
+      - name: Show container logs
+        if: always()
+        run: docker logs openhands-railway-contract 2>/dev/null || true
+
+      - name: Cleanup
+        if: always()
+        run: |
+          docker rm -f openhands-railway-contract 2>/dev/null || true
+          docker volume rm openhands-railway-contract-data 2>/dev/null || true
