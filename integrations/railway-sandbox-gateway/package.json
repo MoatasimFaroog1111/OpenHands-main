@@ -1,0 +1,25 @@
+{
+  "name": "@openhands/railway-sandbox-gateway",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsx --test tests/*.test.ts",
+    "start": "node dist/index.js"
+  },
+  "dependencies": {
+    "http-proxy": "1.18.1",
+    "railway": "3.10.0"
+  },
+  "devDependencies": {
+    "@types/http-proxy": "1.17.16",
+    "@types/node": "22.17.1",
+    "tsx": "4.20.5",
+    "typescript": "5.9.2"
+  }
+}
