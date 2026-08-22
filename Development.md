@@ -63,7 +63,7 @@ make start-backend  # Backend only on port 3000
 make start-frontend # Frontend only on port 3001
 ```
 
-These targets serve the current OpenHands V1 API by default. In the codebase, `make start-backend` runs `openhands.server.listen:app`, and that app includes the `openhands/app_server` V1 routes unless `ENABLE_V1=0`.
+These targets serve the current OpenHands V1 API by default. In the codebase, `make start-backend` runs the canonical `openhands.app_server.app:app` entrypoint. The deprecated `openhands.server.listen:app` module remains only as a backward-compatibility shim.
 
 ---
 
