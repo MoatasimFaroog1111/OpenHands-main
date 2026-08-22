@@ -1,0 +1,8 @@
+[run]
+relative_files = true
+omit =
+    tests/*
+patch =
+    fork
+    _exit
+    subprocess
