@@ -1,0 +1,10 @@
+[run]
+concurrency = gevent
+relative_files = true
+omit =
+    enterprise/tests/*
+    **/test_*
+patch =
+    fork
+    _exit
+    subprocess
