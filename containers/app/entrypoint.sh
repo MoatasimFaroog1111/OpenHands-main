@@ -3,9 +3,27 @@ set -eo pipefail
 
 echo "Starting OpenHands..."
 
+# Railway publishes the service hostname at runtime. Derive the public app URL
+# and CORS origin unless the operator supplied explicit values.
+if [[ -n "${RAILWAY_PUBLIC_DOMAIN:-}" ]]; then
+  export OH_WEB_URL="${OH_WEB_URL:-https://${RAILWAY_PUBLIC_DOMAIN}}"
+  export OH_PERMITTED_CORS_ORIGINS_0="${OH_PERMITTED_CORS_ORIGINS_0:-https://${RAILWAY_PUBLIC_DOMAIN}}"
+fi
+
+# A Railway volume is mounted only when the container starts and is owned by
+# root. Keep the root entrypoint for initialization, but place application data
+# under the mounted volume so it can be handed to the non-root app user below.
+if [[ -n "${RAILWAY_VOLUME_MOUNT_PATH:-}" ]]; then
+  export OH_PERSISTENCE_DIR="${OH_PERSISTENCE_DIR:-${RAILWAY_VOLUME_MOUNT_PATH}/.openhands}"
+  if [[ -z "${FILE_STORE_PATH:-}" || "${FILE_STORE_PATH}" == "/.openhands" ]]; then
+    export FILE_STORE_PATH="$OH_PERSISTENCE_DIR"
+  fi
+  export TMPDIR="${TMPDIR:-${RAILWAY_VOLUME_MOUNT_PATH}/tmp}"
+fi
+
 # Enforce the application/sandbox trust boundary before any runtime setup. This
-# blocks hosted process sandboxes and hosted root execution even when NO_SETUP is
-# used to bypass the normal user-creation path.
+# blocks hosted process sandboxes and hosted root application execution even when
+# NO_SETUP is used to bypass the normal user-creation path.
 python -m openhands.app_server.sandbox.runtime_security
 
 if [[ $NO_SETUP == "true" ]]; then
@@ -49,6 +67,20 @@ else
     fi
   fi
   usermod -aG openhands enduser
+
+  # Railway volumes are mounted as root. Create the app-owned directories while
+  # privileged, then hand only those directories to the non-root application
+  # user. Existing data written by enduser keeps its ownership across deploys.
+  if [[ -n "${RAILWAY_VOLUME_MOUNT_PATH:-}" ]]; then
+    ENDUSER_GROUP="$(id -gn enduser)"
+    for directory in "$OH_PERSISTENCE_DIR" "$FILE_STORE_PATH" "$TMPDIR"; do
+      if [[ -n "$directory" ]]; then
+        mkdir -p "$directory"
+        chown enduser:"$ENDUSER_GROUP" "$directory"
+        chmod u+rwx "$directory"
+      fi
+    done
+  fi
 
   runtime="${RUNTIME:-docker}"
   if [[ "$runtime" != "remote" && "$runtime" != "local" && "$runtime" != "process" ]]; then
