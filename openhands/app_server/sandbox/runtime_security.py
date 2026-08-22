@@ -135,13 +135,22 @@ def validate_runtime_security(
     if not hosted:
         return
 
+    if effective_uid is None and hasattr(os, 'geteuid'):
+        effective_uid = os.geteuid()
+
     sandbox_user_id = env.get('SANDBOX_USER_ID')
     planned_root = sandbox_user_id is not None and sandbox_user_id.strip() == '0'
 
-    if effective_uid is None and sandbox_user_id is None and hasattr(os, 'geteuid'):
-        effective_uid = os.geteuid()
+    # NO_SETUP bypasses the entrypoint's user drop, so in that mode the current
+    # effective UID is the security boundary regardless of SANDBOX_USER_ID.
+    if _is_truthy(env.get('NO_SETUP')):
+        running_as_root = effective_uid == 0
+    else:
+        running_as_root = planned_root or (
+            sandbox_user_id is None and effective_uid == 0
+        )
 
-    if planned_root or (sandbox_user_id is None and effective_uid == 0):
+    if running_as_root:
         raise RuntimeError(
             'Unsafe application user: hosted OpenHands deployments must not run '
             'the app server as root. Set SANDBOX_USER_ID to a non-zero UID.'
