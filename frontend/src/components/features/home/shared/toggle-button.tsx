@@ -1,5 +1,6 @@
-import { cn } from "#/utils/utils";
 import ChevronDownSmallIcon from "#/icons/chevron-down-small.svg?react";
+import { DropdownToggleButton } from "#/ui/dropdown-toggle-button";
+import { cn } from "#/utils/utils";
 
 interface ToggleButtonProps {
   isOpen: boolean;
@@ -17,17 +18,14 @@ export function ToggleButton({
   iconClassName,
 }: ToggleButtonProps) {
   return (
-    <button
-      // eslint-disable-next-line react/jsx-props-no-spreading
-      {...getToggleButtonProps({
-        disabled,
-        className: cn(
-          "text-[#fff]",
-          "disabled:cursor-not-allowed disabled:opacity-60",
-        ),
-      })}
-      type="button"
-      aria-label="Toggle menu"
+    <DropdownToggleButton
+      disabled={disabled}
+      getToggleButtonProps={getToggleButtonProps}
+      ariaLabel="Toggle menu"
+      className={cn(
+        "text-[#fff]",
+        "disabled:cursor-not-allowed disabled:opacity-60",
+      )}
     >
       <ChevronDownSmallIcon
         className={cn(
@@ -36,6 +34,6 @@ export function ToggleButton({
           iconClassName,
         )}
       />
-    </button>
+    </DropdownToggleButton>
   );
 }

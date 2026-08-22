@@ -1,5 +1,5 @@
-/* eslint-disable react/jsx-props-no-spreading */
 import { ChevronDown } from "lucide-react";
+import { DropdownToggleButton } from "#/ui/dropdown-toggle-button";
 import { cn } from "#/utils/utils";
 
 interface ToggleButtonProps {
@@ -14,18 +14,16 @@ export function ToggleButton({
   getToggleButtonProps,
 }: ToggleButtonProps) {
   return (
-    <button
-      type="button"
-      data-testid="dropdown-trigger"
-      {...getToggleButtonProps({
-        disabled: isDisabled,
-        className: cn("text-white", isDisabled && "cursor-not-allowed"),
-      })}
+    <DropdownToggleButton
+      disabled={isDisabled}
+      getToggleButtonProps={getToggleButtonProps}
+      testId="dropdown-trigger"
+      className={cn("text-white", isDisabled && "cursor-not-allowed")}
     >
       <ChevronDown
         size={16}
         className={cn("transition-transform", isOpen && "rotate-180")}
       />
-    </button>
+    </DropdownToggleButton>
   );
 }
