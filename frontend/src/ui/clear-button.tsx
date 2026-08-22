@@ -1,15 +1,10 @@
-import type {
-  ButtonHTMLAttributes,
-  MouseEvent,
-  ReactNode,
-} from "react";
+import type { ButtonHTMLAttributes, MouseEvent, ReactNode } from "react";
 import { X } from "lucide-react";
 
-export interface ClearButtonProps
-  extends Omit<
-    ButtonHTMLAttributes<HTMLButtonElement>,
-    "aria-label" | "children" | "onClick" | "type"
-  > {
+export interface ClearButtonProps extends Omit<
+  ButtonHTMLAttributes<HTMLButtonElement>,
+  "aria-label" | "children" | "onClick" | "type"
+> {
   onClear: () => void;
   stopPropagation?: boolean;
   testId?: string;
@@ -34,7 +29,6 @@ export function ClearButton({
 
   return (
     <button
-      // eslint-disable-next-line react/jsx-props-no-spreading
       {...buttonProps}
       type="button"
       onClick={handleClick}
