@@ -101,7 +101,7 @@ jobs:
             --cov=openhands.app_server.app_conversation.hook_loader \
             --cov-branch \
             --cov-report=term-missing \
-            --cov-fail-under=70
+            --cov-fail-under=75
         env:
           COVERAGE_FILE: ".coverage.critical.${{ matrix['python-version'] }}"
       - name: Store critical coverage file
