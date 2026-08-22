@@ -37,7 +37,7 @@
     "react-markdown": "^10.1.0",
     "react-router": "^7.15.0",
     "react-syntax-highlighter": "^16.1.0",
-    "remark-breaks": "^4.0.0",
+    "remark-breaks": "^4.0.1",
     "remark-gfm": "^4.0.1",
     "sirv-cli": "^3.0.1",
     "socket.io-client": "^4.8.3",
@@ -59,11 +59,12 @@
     "preview": "vite preview",
     "make-i18n": "node scripts/make-i18n-translations.cjs",
     "prelint": "npm run make-i18n",
-    "lint": "npm run typecheck && eslint src --ext .ts,.tsx,.js && prettier --check src/**/*.{ts,tsx}",
+    "lint": "npm run typecheck && npm run check-design-system-boundary && eslint src --ext .ts,.tsx,.js && prettier --check src/**/*.{ts,tsx}",
     "lint:fix": "eslint src --ext .ts,.tsx,.js --fix && prettier --write src/**/*.{ts,tsx}",
     "prepare": "cd .. && husky frontend/.husky",
     "typecheck": "react-router typegen && tsc",
     "typecheck:staged": "react-router typegen && npx tsc --noEmit --skipLibCheck",
+    "check-design-system-boundary": "node scripts/check-design-system-boundary.cjs",
     "check-translation-completeness": "node scripts/check-translation-completeness.cjs"
   },
   "lint-staged": {
