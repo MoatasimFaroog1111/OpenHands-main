@@ -56,10 +56,22 @@ const body: StartRuntimeRequest = {
   environment: {},
 };
 
-test('control API enforces X-API-Key and exposes legacy RemoteRuntime endpoints', async (t) => {
+test('control API authenticates, clears stale failed starts, and exposes RemoteRuntime endpoints', async (t) => {
+  const registry = new MemoryRegistry();
+  await registry.save({
+    sessionId: body.session_id,
+    runtimeId: body.session_id,
+    status: 'error',
+    request: structuredClone(body),
+    sessionKeyVersion: 1,
+    createdAt: '2026-08-22T00:00:00.000Z',
+    updatedAt: '2026-08-22T00:00:00.000Z',
+    lastError: 'simulated previous provisioning failure',
+  });
+
   const service = new RuntimeService(
     config,
-    new MemoryRegistry(),
+    registry,
     new PlatformStub(),
     async () => true,
   );
