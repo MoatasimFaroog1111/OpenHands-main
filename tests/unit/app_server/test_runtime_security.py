@@ -102,6 +102,29 @@ def test_hosted_deployment_rejects_effective_root_when_uid_not_configured():
         validate_runtime_security(env, effective_uid=0)
 
 
+def test_no_setup_cannot_bypass_hosted_root_restriction():
+    env = {
+        'RUNTIME': 'remote',
+        'RAILWAY_PUBLIC_DOMAIN': 'openhands.example.com',
+        'SANDBOX_USER_ID': '42421',
+        'NO_SETUP': 'true',
+    }
+
+    with pytest.raises(RuntimeError, match='must not run the app server as root'):
+        validate_runtime_security(env, effective_uid=0)
+
+
+def test_no_setup_allows_hosted_non_root_process():
+    env = {
+        'RUNTIME': 'remote',
+        'RAILWAY_PUBLIC_DOMAIN': 'openhands.example.com',
+        'SANDBOX_USER_ID': '42421',
+        'NO_SETUP': 'true',
+    }
+
+    validate_runtime_security(env, effective_uid=42421)
+
+
 def test_hosted_remote_runtime_allows_non_root_app_user():
     env = {
         'RUNTIME': 'remote',
