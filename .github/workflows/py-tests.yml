@@ -50,7 +50,7 @@ jobs:
       - name: Build Environment
         run: make build
       - name: Run Unit Tests
-        run: PYTHONPATH=".:$PYTHONPATH" poetry run pytest --forked -n auto -s ./tests/unit --cov=openhands --cov-branch --cov-config=dev_config/python/.coveragerc
+        run: PYTHONPATH=".:$PYTHONPATH" poetry run pytest --forked -n auto -s ./tests/unit --cov=openhands --cov-branch
         env:
           COVERAGE_FILE: ".coverage.${{ matrix['python-version'] }}"
       - name: Store coverage file
@@ -60,6 +60,49 @@ jobs:
           path: |
             .coverage.${{ matrix['python-version'] }}
             .coverage.runtime.${{ matrix['python-version'] }}
+          include-hidden-files: true
+
+  critical-coverage:
+    name: Critical Path Coverage
+    runs-on: ubuntu-24.04
+    env:
+      OPENHANDS_SUPPRESS_BANNER: "1"
+    strategy:
+      matrix:
+        python-version: ["3.12"]
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install poetry via pipx
+        run: pipx install poetry
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: "poetry"
+      - name: Install Python dependencies using Poetry
+        run: poetry install --with dev,test,runtime
+      - name: Run critical path coverage
+        run: |
+          PYTHONPATH=".:$PYTHONPATH" poetry run pytest -q \
+            tests/unit/app_server/test_runtime_security.py \
+            tests/unit/app_server/test_session_auth_critical_paths.py \
+            tests/unit/app_server/test_auth_user_context_critical_paths.py \
+            tests/unit/app_server/test_config_runtime_selection.py \
+            tests/unit/app_server/test_conversation_hook_loader.py \
+            --cov=openhands.app_server.sandbox.runtime_security \
+            --cov=openhands.app_server.sandbox.session_auth \
+            --cov=openhands.app_server.user.auth_user_context \
+            --cov=openhands.app_server.config \
+            --cov=openhands.app_server.app_conversation.hook_loader \
+            --cov-branch \
+            --cov-report=term-missing
+        env:
+          COVERAGE_FILE: ".coverage.critical.${{ matrix['python-version'] }}"
+      - name: Store critical coverage file
+        uses: actions/upload-artifact@v7
+        with:
+          name: coverage-critical-openhands
+          path: ".coverage.critical.${{ matrix['python-version'] }}"
           include-hidden-files: true
 
   test-enterprise:
@@ -81,7 +124,7 @@ jobs:
         working-directory: ./enterprise
         run: poetry install --with dev,test
       - name: Run Unit Tests
-        run: PYTHONPATH=".:$PYTHONPATH" poetry run --project=enterprise pytest --forked -n auto -s -p no:ddtrace -p no:ddtrace.pytest_bdd -p no:ddtrace.pytest_benchmark ./enterprise/tests/unit --cov=enterprise --cov-branch --cov-config=enterprise/dev_config/python/.coveragerc
+        run: PYTHONPATH=".:$PYTHONPATH" poetry run --project=enterprise pytest --forked -n auto -s -p no:ddtrace -p no:ddtrace.pytest_bdd -p no:ddtrace.pytest_benchmark ./enterprise/tests/unit --cov=enterprise --cov-branch
         env:
           COVERAGE_FILE: ".coverage.enterprise.${{ matrix['python-version'] }}"
       - name: Store coverage file
@@ -95,7 +138,7 @@ jobs:
     name: Coverage Comment
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    needs: [test-on-linux, test-enterprise]
+    needs: [test-on-linux, critical-coverage, test-enterprise]
     permissions:
       pull-requests: write
       contents: write
