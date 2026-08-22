@@ -2,6 +2,12 @@
 set -eo pipefail
 
 echo "Starting OpenHands..."
+
+# Enforce the application/sandbox trust boundary before any runtime setup. This
+# blocks hosted process sandboxes and hosted root execution even when NO_SETUP is
+# used to bypass the normal user-creation path.
+python -m openhands.app_server.sandbox.runtime_security
+
 if [[ $NO_SETUP == "true" ]]; then
   echo "Skipping setup, running as $(whoami)"
   "$@"
@@ -43,19 +49,29 @@ else
     fi
   fi
   usermod -aG openhands enduser
-  # get the user group of /var/run/docker.sock and set openhands to that group
-  DOCKER_SOCKET_GID=$(stat -c '%g' /var/run/docker.sock)
-  echo "Docker socket group id: $DOCKER_SOCKET_GID"
-  if getent group $DOCKER_SOCKET_GID; then
-    echo "Group with id $DOCKER_SOCKET_GID already exists"
-  else
-    echo "Creating group with id $DOCKER_SOCKET_GID"
-    groupadd -g $DOCKER_SOCKET_GID docker
+
+  runtime="${RUNTIME:-docker}"
+  if [[ "$runtime" != "remote" && "$runtime" != "local" && "$runtime" != "process" ]]; then
+    if [ ! -S /var/run/docker.sock ]; then
+      echo "Docker runtime selected but /var/run/docker.sock is unavailable"
+      exit 1
+    fi
+
+    # Get the user group of /var/run/docker.sock and grant the non-root runtime
+    # user access only when the Docker sandbox backend actually needs it.
+    DOCKER_SOCKET_GID=$(stat -c '%g' /var/run/docker.sock)
+    echo "Docker socket group id: $DOCKER_SOCKET_GID"
+    if getent group $DOCKER_SOCKET_GID; then
+      echo "Group with id $DOCKER_SOCKET_GID already exists"
+    else
+      echo "Creating group with id $DOCKER_SOCKET_GID"
+      groupadd -g $DOCKER_SOCKET_GID docker
+    fi
+    usermod -aG $DOCKER_SOCKET_GID enduser
   fi
 
   mkdir -p /home/enduser/.cache/huggingface/hub/
 
-  usermod -aG $DOCKER_SOCKET_GID enduser
   echo "Running as enduser"
   su enduser /bin/bash -c "${*@Q}" # This magically runs any arguments passed to the script as a command
 fi

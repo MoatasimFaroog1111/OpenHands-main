@@ -24,9 +24,14 @@ from openhands.app_server.middleware import (
     RateLimitMiddleware,
 )
 from openhands.app_server.sandbox import sandbox_proxy_router
+from openhands.app_server.sandbox.runtime_security import validate_runtime_security
 from openhands.app_server.static import SPAStaticFiles
 from openhands.app_server.status.status_router import router as health_router
 from openhands.app_server.version import get_version
+
+# Fail closed before initializing integrations or serving routes when the selected
+# sandbox/user boundary is unsafe for a hosted deployment.
+validate_runtime_security()
 
 # Initialize the Tavily MCP proxy before creating the app
 init_tavily_proxy()

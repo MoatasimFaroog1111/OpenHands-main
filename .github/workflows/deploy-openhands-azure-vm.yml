@@ -227,6 +227,7 @@ jobs:
               -e OH_SANDBOX_USE_HOST_NETWORK=true \
               -e OH_SANDBOX_MAX_NUM_SANDBOXES=1 \
               -e OH_PERSISTENCE_DIR=/.openhands \
+              -e SANDBOX_USER_ID=42421 \
               -e RUNTIME=docker \
               -e WORKSPACE_MOUNT_PATH=/opt/openhands/workspace \
               -v /var/run/docker.sock:/var/run/docker.sock \
@@ -256,7 +257,7 @@ jobs:
                 sudo docker inspect openhands \
                   --format '{{range .Config.Env}}{{println .}}{{end}}' |
                   grep -E \
-                    '^(OH_SANDBOX_|OH_WEB_URL|OH_PERMITTED_CORS)' ||
+                    '^(OH_SANDBOX_|OH_WEB_URL|OH_PERMITTED_CORS|SANDBOX_USER_ID)' ||
                   true
 
                 rm -f \

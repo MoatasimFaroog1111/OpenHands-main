@@ -6,6 +6,23 @@ Manages sandbox environments for secure agent execution within OpenHands.
 
 Since agents can do things that may harm your system, they are typically run inside a sandbox (like a Docker container). This module provides services for creating, managing, and monitoring these sandbox environments.
 
+## Security boundary
+
+Agent-generated code must execute outside the OpenHands application process in any
+hosted deployment. Hosted deployments therefore reject `RUNTIME=local` and
+`RUNTIME=process` at startup and must use an isolated Docker or remote sandbox.
+The application server must also run as a non-root user when a hosted deployment
+is detected.
+
+`RUNTIME=process` is disabled by default even outside hosted deployments because
+it shares the application container. Trusted local development can opt in
+explicitly with `OH_ALLOW_INSECURE_PROCESS_SANDBOX=true`. This opt-in never
+bypasses the hosted-deployment restriction.
+
+For single-container cloud platforms that cannot provide Docker isolation, use
+`RUNTIME=remote` with `SANDBOX_REMOTE_RUNTIME_API_URL` and `SANDBOX_API_KEY`, and
+set `SANDBOX_USER_ID` to a non-zero UID.
+
 ## Key Components
 
 - **SandboxService**: Abstract service for sandbox lifecycle management
