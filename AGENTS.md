@@ -123,7 +123,7 @@ When working on a PR that requires design documents, scripts meant for developme
 ## Repository Structure
 Backend:
 - Located in the `openhands` directory
-- The current V1 application server lives in `openhands/app_server/`. `make start-backend` still launches `openhands.server.listen:app`, which includes the V1 routes by default unless `ENABLE_V1=0`.
+- The current V1 application server lives in `openhands/app_server/`. Internal launch paths use the canonical `openhands.app_server.app:app` entrypoint; `openhands.server.listen:app` is retained only as a deprecated backward-compatibility shim.
 - For V1 web-app docs, LLM setup should point users to the Settings UI.
 - Testing:
   - All tests are in `tests/unit/test_*.py`
