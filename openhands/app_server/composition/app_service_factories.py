@@ -18,7 +18,9 @@ from openhands.app_server.services.jwt_service import JwtServiceInjector
 from openhands.app_server.user.user_context import UserContextInjector
 
 
-def create_default_app_conversation_info_injector() -> AppConversationInfoServiceInjector:
+def create_default_app_conversation_info_injector() -> (
+    AppConversationInfoServiceInjector
+):
     """Build the SQL-backed conversation-info injector."""
     from openhands.app_server.app_conversation.sql_app_conversation_info_service import (  # noqa: E501
         SQLAppConversationInfoServiceInjector,
