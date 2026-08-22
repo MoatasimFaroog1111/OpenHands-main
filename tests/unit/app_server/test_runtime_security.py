@@ -171,7 +171,9 @@ def test_railway_rejects_docker_runtime_even_with_non_root_app_user():
         'SANDBOX_USER_ID': '42421',
     }
 
-    with pytest.raises(RuntimeError, match='Railway deployments require RUNTIME=remote'):
+    with pytest.raises(
+        RuntimeError, match='Railway deployments require RUNTIME=remote'
+    ):
         validate_runtime_security(env, effective_uid=0)
 
 
