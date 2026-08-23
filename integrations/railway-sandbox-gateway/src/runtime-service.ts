@@ -273,6 +273,14 @@ export class RuntimeService {
       timeoutSec: 30,
     });
 
+    // The legacy RemoteRuntime contract sends an executable followed by its
+    // arguments. Docker treats values after the image as CMD arguments and
+    // appends them to the image ENTRYPOINT, which duplicates the OpenHands
+    // executable for the official agent-server image. Override ENTRYPOINT with
+    // the requested executable and pass only the remaining arguments as CMD.
+    const [entrypoint, ...commandArgs] = request.command;
+    if (!entrypoint) throw new Error('command must contain executable');
+
     const command = [
       'docker run -d',
       `--name ${CONTAINER_NAME}`,
@@ -286,8 +294,9 @@ export class RuntimeService {
       '-p "[::]:60001:60001"',
       '-p "[::]:12000:12000"',
       '-p "[::]:12001:12001"',
+      `--entrypoint ${shellQuote(entrypoint)}`,
       shellQuote(request.image),
-      ...request.command.map(shellQuote),
+      ...commandArgs.map(shellQuote),
     ].join(' ');
 
     const launched = await sandbox.exec(command, { timeoutSec: 120 });
