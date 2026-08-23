@@ -100,7 +100,13 @@ test('start, keepalive, pause, resume and stop preserve the remote runtime contr
   assert.equal(started.runtime_id, request.session_id);
   assert.equal(started.url, `https://gateway.example.com/${request.session_id}`);
   assert.ok(started.session_api_key.length > 20);
-  assert.match(platform.created[0].commands.join('\n'), /docker run -d/);
+
+  const dockerRun = platform.created[0].commands.find((command) => command.startsWith('docker run -d'));
+  assert.ok(dockerRun);
+  assert.ok(dockerRun.includes("--entrypoint '/usr/local/bin/openhands-agent-server'"));
+  assert.ok(dockerRun.includes("'ghcr.io/openhands/runtime:test' '--port' '60000'"));
+  assert.ok(!dockerRun.includes("'ghcr.io/openhands/runtime:test' '/usr/local/bin/openhands-agent-server'"));
+
   const envFile = [...platform.created[0].files.values()][0];
   assert.match(envFile, /OH_SESSION_API_KEYS_0=/);
 
