@@ -3,6 +3,7 @@ import { createGatewayServer } from './http-server.js';
 import { RailwaySandboxPlatform } from './platform.js';
 import { FileRuntimeRegistry } from './registry.js';
 import { RuntimeService } from './runtime-service.js';
+import { SandboxTunnelManager } from './tunnel.js';
 
 const config = loadConfig();
 const registry = new FileRuntimeRegistry(config.registryPath, config.apiKey);
@@ -10,8 +11,11 @@ const platform = new RailwaySandboxPlatform(
   config.railwayEnvironmentId,
   config.idleTimeoutMinutes,
 );
-const service = new RuntimeService(config, registry, platform);
-const server = createGatewayServer(service, config.apiKey);
+const tunnel = new SandboxTunnelManager();
+const service = new RuntimeService(config, registry, platform, tunnel);
+await service.initialize();
+
+const server = createGatewayServer(service, config.apiKey, tunnel);
 let keepAliveRunning = false;
 const keepAliveTimer = setInterval(() => {
   if (keepAliveRunning) return;
@@ -20,7 +24,9 @@ const keepAliveTimer = setInterval(() => {
     .keepAlive()
     .then(({ failed }) => {
       if (failed.length > 0) {
-        console.error(`Railway sandbox keepalive failed for: ${failed.join(', ')}`);
+        console.error(
+          `Railway sandbox keepalive failed for: ${failed.join(', ')}`,
+        );
       }
     })
     .catch((error) => {
@@ -39,6 +45,8 @@ server.listen(config.port, '::', () => {
 for (const signal of ['SIGTERM', 'SIGINT'] as const) {
   process.on(signal, () => {
     clearInterval(keepAliveTimer);
-    server.close(() => process.exit(0));
+    server.close(() => {
+      void tunnel.close().finally(() => process.exit(0));
+    });
   });
 }
