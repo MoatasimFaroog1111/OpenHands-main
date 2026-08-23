@@ -1,0 +1,32 @@
+name: Railway Sandbox Gateway
+
+on:
+  pull_request:
+    paths:
+      - 'integrations/railway-sandbox-gateway/**'
+      - '.github/workflows/railway-sandbox-gateway.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'integrations/railway-sandbox-gateway/**'
+      - '.github/workflows/railway-sandbox-gateway.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  test-build:
+    runs-on: ubuntu-22.04
+    defaults:
+      run:
+        working-directory: integrations/railway-sandbox-gateway
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-node@v6
+        with:
+          node-version: '22'
+      - run: npm install --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - run: docker build -t openhands-railway-sandbox-gateway:test .
