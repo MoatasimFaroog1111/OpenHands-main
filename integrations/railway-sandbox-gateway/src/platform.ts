@@ -33,7 +33,10 @@ class RailwaySandboxHandle implements PlatformSandbox {
     return this.#sandbox.id;
   }
 
-  async exec(command: string, options?: { timeoutSec?: number }): Promise<ExecResult> {
+  async exec(
+    command: string,
+    options?: { timeoutSec?: number },
+  ): Promise<ExecResult> {
     return await this.#sandbox.exec(command, options);
   }
 
@@ -89,16 +92,4 @@ export class RailwaySandboxPlatform implements SandboxPlatform {
   async deleteCheckpoint(id: string): Promise<void> {
     await Sandbox.deleteCheckpoint(id, { environmentId: this.#environmentId });
   }
-}
-
-export function parsePrivateIpv6(procNetIfInet6: string): string {
-  for (const rawLine of procNetIfInet6.split(/\r?\n/)) {
-    const parts = rawLine.trim().split(/\s+/);
-    if (parts.length < 6) continue;
-    const [hex, , , , , iface] = parts;
-    if (iface === 'lo' || !/^[0-9a-fA-F]{32}$/.test(hex)) continue;
-    if (!hex.toLowerCase().startsWith('fd')) continue;
-    return hex.match(/.{1,4}/g)!.join(':').replace(/(^|:)0{1,3}/g, '$1');
-  }
-  throw new Error('Railway private IPv6 address was not found in /proc/net/if_inet6');
 }
