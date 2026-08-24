@@ -3,6 +3,7 @@ import { createHmac } from 'node:crypto';
 import type { GatewayConfig } from './config.js';
 import { parsePrivateIpv6, type PlatformSandbox, type SandboxPlatform } from './platform.js';
 import type { RuntimeRegistry } from './registry.js';
+import { collectStartupDiagnostics } from './startup-diagnostics.js';
 import type {
   ProxyTarget,
   RuntimeRecord,
@@ -71,7 +72,7 @@ export class RuntimeService {
       record.sandboxId = sandbox.id;
       record.privateIpv6 = await this.#discoverPrivateIpv6(sandbox);
       await this.#launchRuntime(sandbox, record);
-      await this.#waitUntilHealthy(record.privateIpv6);
+      await this.#waitUntilHealthy(sandbox, record.privateIpv6);
       record.status = 'running';
       record.updatedAt = new Date().toISOString();
       record.lastError = undefined;
@@ -176,7 +177,7 @@ export class RuntimeService {
       record.sandboxId = sandbox.id;
       record.privateIpv6 = await this.#discoverPrivateIpv6(sandbox);
       await this.#launchRuntime(sandbox, record);
-      await this.#waitUntilHealthy(record.privateIpv6);
+      await this.#waitUntilHealthy(sandbox, record.privateIpv6);
       record.status = 'running';
       record.lastError = undefined;
       record.updatedAt = new Date().toISOString();
@@ -304,15 +305,21 @@ export class RuntimeService {
     ensureExecSuccess(launched, 'launch OpenHands agent-server container');
   }
 
-  async #waitUntilHealthy(ipv6: string): Promise<void> {
+  async #waitUntilHealthy(sandbox: PlatformSandbox, ipv6: string): Promise<void> {
     const deadline = Date.now() + this.#config.startupTimeoutMs;
     const url = `http://[${ipv6}]:${AGENT_SERVER_PORT}/health`;
     while (Date.now() < deadline) {
       if (await this.#probe(url)) return;
       await new Promise((resolve) => setTimeout(resolve, 1_000));
     }
+
+    const diagnostics = await collectStartupDiagnostics(sandbox, {
+      containerName: CONTAINER_NAME,
+      privateIpv6: ipv6,
+      port: AGENT_SERVER_PORT,
+    });
     throw new Error(
-      `agent-server did not become healthy within ${this.#config.startupTimeoutMs}ms`,
+      `agent-server did not become healthy within ${this.#config.startupTimeoutMs}ms\n${diagnostics}`,
     );
   }
 

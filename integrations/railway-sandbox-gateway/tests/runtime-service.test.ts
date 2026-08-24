@@ -27,11 +27,52 @@ class FakeSandbox implements PlatformSandbox {
   destroyed = false;
   constructor(id: string) { this.id = id; }
   async exec(command: string): Promise<ExecResult> {
+    if (this.destroyed) throw new Error('cannot execute command after sandbox destruction');
     this.commands.push(command);
     if (command === 'cat /proc/net/if_inet6') {
       return {
         exitCode: 0,
         stdout: 'fd12632d7c8b0001d00001bafa2e7917 02 40 00 80 eth0\n00000000000000000000000000000001 01 80 10 80 lo\n',
+        stderr: '',
+      };
+    }
+    if (command.startsWith('docker logs --tail')) {
+      return {
+        exitCode: 0,
+        stdout: [
+          'agent boot failed before health became ready',
+          'TOKEN=super-secret-token',
+          'OPENAI_API_KEY=sk-test-secret-value',
+          'Authorization: Bearer hidden-bearer-token',
+        ].join('\n'),
+        stderr: '',
+      };
+    }
+    if (command.startsWith('docker ps -a')) {
+      return {
+        exitCode: 0,
+        stdout: 'openhands-agent-server\tghcr.io/openhands/runtime:test\tExited (1)\t',
+        stderr: '',
+      };
+    }
+    if (command.startsWith('docker inspect --format')) {
+      return {
+        exitCode: 0,
+        stdout: 'status=exited exit=1 oom=false error=""',
+        stderr: '',
+      };
+    }
+    if (command.startsWith('docker exec')) {
+      return {
+        exitCode: 1,
+        stdout: '',
+        stderr: 'container is not running',
+      };
+    }
+    if (command.includes('command -v curl')) {
+      return {
+        exitCode: 0,
+        stdout: 'URL=http://127.0.0.1:60000/health\nHTTP=000\nCURL_EXIT=7',
         stderr: '',
       };
     }
@@ -126,6 +167,47 @@ test('start, keepalive, pause, resume and stop preserve the remote runtime contr
 
   assert.equal(await service.stop(started.runtime_id), true);
   assert.equal(await service.get(request.session_id), undefined);
+});
+
+test('health timeout captures sanitized diagnostics before destroying the sandbox', async () => {
+  const registry = new MemoryRegistry();
+  const platform = new FakePlatform();
+  const service = new RuntimeService(
+    { ...config, startupTimeoutMs: 0 },
+    registry,
+    platform,
+    async () => false,
+  );
+
+  await assert.rejects(
+    () => service.start(structuredClone(request)),
+    (error: unknown) => {
+      assert.ok(error instanceof Error);
+      assert.match(error.message, /agent-server did not become healthy within 0ms/);
+      assert.match(error.message, /\[startup-diagnostics\]/);
+      assert.match(error.message, /\[sandbox-health\]/);
+      assert.match(error.message, /\[container-health\]/);
+      assert.match(error.message, /\[container-state\]/);
+      assert.match(error.message, /\[docker-ps\]/);
+      assert.match(error.message, /\[docker-logs\]/);
+      assert.match(error.message, /agent boot failed before health became ready/);
+      assert.match(error.message, /\[REDACTED/);
+      assert.doesNotMatch(error.message, /super-secret-token/);
+      assert.doesNotMatch(error.message, /sk-test-secret-value/);
+      assert.doesNotMatch(error.message, /hidden-bearer-token/);
+      return true;
+    },
+  );
+
+  const sandbox = platform.created[0];
+  assert.equal(sandbox.destroyed, true);
+  assert.ok(sandbox.commands.some((command) => command.includes('command -v curl')));
+  assert.ok(sandbox.commands.some((command) => command.startsWith('docker logs --tail')));
+
+  const failed = registry.records.get(request.session_id);
+  assert.equal(failed?.status, 'error');
+  assert.match(failed?.lastError || '', /\[startup-diagnostics\]/);
+  assert.doesNotMatch(failed?.lastError || '', /super-secret-token/);
 });
 
 test('proxy mapping routes agent-server and named services to private IPv6 ports', async () => {
