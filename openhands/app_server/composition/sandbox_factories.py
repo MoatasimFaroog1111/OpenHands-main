@@ -15,13 +15,13 @@ def create_default_sandbox_service_injector() -> SandboxServiceInjector:
     from openhands.app_server.sandbox.process_sandbox_service import (
         ProcessSandboxServiceInjector,
     )
-    from openhands.app_server.sandbox.remote_sandbox_service import (
-        RemoteSandboxServiceInjector,
+    from openhands.app_server.sandbox.resilient_remote_sandbox_service import (
+        ResilientRemoteSandboxServiceInjector,
     )
 
     runtime = os.getenv('RUNTIME')
     if runtime == 'remote':
-        return RemoteSandboxServiceInjector(
+        return ResilientRemoteSandboxServiceInjector(
             api_key=os.environ['SANDBOX_API_KEY'],
             api_url=os.environ['SANDBOX_REMOTE_RUNTIME_API_URL'],
         )
