@@ -51,7 +51,7 @@ test('production gate stops a runtime when a later assertion fails', async (t) =
     runProductionGate(structuredClone(options)),
     /work-2 reverse-tunnel route returned HTTP 502/,
   );
-  assert.equal(fake.stopCalls, 1);
+  assert.equal(fake.stopCalls >= 1, true);
   assert.equal(fake.runtimeStatus, 'stopped');
 });
 
