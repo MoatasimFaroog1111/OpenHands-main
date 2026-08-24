@@ -1,6 +1,7 @@
 export interface GatewayConfig {
   apiKey: string;
   publicBaseUrl: string;
+  tunnelBaseUrl: string;
   railwayEnvironmentId: string;
   registryPath: string;
   port: number;
@@ -41,22 +42,43 @@ function normalizePublicBaseUrl(value: string): string {
   return parsed.toString().replace(/\/$/, '');
 }
 
+function normalizeTunnelBaseUrl(value: string): string {
+  const parsed = new URL(value);
+  if (parsed.protocol !== 'https:' && parsed.protocol !== 'http:') {
+    throw new Error('GATEWAY_TUNNEL_BASE_URL must use http or https');
+  }
+  if (
+    parsed.protocol === 'http:' &&
+    parsed.hostname !== 'localhost' &&
+    !parsed.hostname.endsWith('.railway.internal')
+  ) {
+    throw new Error(
+      'GATEWAY_TUNNEL_BASE_URL must use https outside localhost or Railway private networking',
+    );
+  }
+  return parsed.toString().replace(/\/$/, '');
+}
+
 export function loadConfig(): GatewayConfig {
   if (!process.env.RAILWAY_TOKEN && !process.env.RAILWAY_API_TOKEN) {
     throw new Error('RAILWAY_TOKEN or RAILWAY_API_TOKEN is required');
   }
 
-  const publicBaseUrl =
+  const publicBaseUrlRaw =
     process.env.GATEWAY_PUBLIC_BASE_URL?.trim() ||
     (process.env.RAILWAY_PUBLIC_DOMAIN
       ? `https://${process.env.RAILWAY_PUBLIC_DOMAIN}`
       : '');
 
-  if (!publicBaseUrl) {
+  if (!publicBaseUrlRaw) {
     throw new Error(
       'GATEWAY_PUBLIC_BASE_URL or RAILWAY_PUBLIC_DOMAIN is required',
     );
   }
+  const publicBaseUrl = normalizePublicBaseUrl(publicBaseUrlRaw);
+  const tunnelBaseUrl = normalizeTunnelBaseUrl(
+    process.env.GATEWAY_TUNNEL_BASE_URL?.trim() || publicBaseUrl,
+  );
 
   const idleTimeoutMinutes = positiveInt('SANDBOX_IDLE_TIMEOUT_MINUTES', 60);
   const keepAliveSeconds = positiveInt('SANDBOX_KEEPALIVE_SECONDS', 240);
@@ -68,7 +90,8 @@ export function loadConfig(): GatewayConfig {
 
   return {
     apiKey: requiredSecret('GATEWAY_API_KEY'),
-    publicBaseUrl: normalizePublicBaseUrl(publicBaseUrl),
+    publicBaseUrl,
+    tunnelBaseUrl,
     railwayEnvironmentId: required('RAILWAY_ENVIRONMENT_ID'),
     registryPath:
       process.env.RUNTIME_REGISTRY_PATH ||

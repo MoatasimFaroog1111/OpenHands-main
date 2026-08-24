@@ -1,11 +1,12 @@
 import type { PlatformSandbox } from './platform.js';
 
 const MAX_SECTION_CHARS = 4_000;
-const MAX_TOTAL_CHARS = 12_000;
+const MAX_TOTAL_CHARS = 16_000;
 const LOG_TAIL_LINES = 120;
 
 export interface StartupDiagnosticTarget {
   containerName: string;
+  relatedContainers?: string[];
   privateIpv6?: string;
   port: number;
 }
@@ -25,9 +26,11 @@ export async function collectStartupDiagnostics(
     ],
     [
       'container-state',
-      `docker inspect --format ${shellQuote(
-        'status={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} error={{json .State.Error}} started={{.State.StartedAt}} finished={{.State.FinishedAt}}',
-      )} ${shellQuote(target.containerName)}`,
+      containerStateCommand(target.containerName),
+    ],
+    [
+      'container-mounts',
+      containerMountsCommand(target.containerName),
     ],
     [
       'docker-ps',
@@ -41,6 +44,19 @@ export async function collectStartupDiagnostics(
     ],
   ];
 
+  for (const relatedContainer of target.relatedContainers || []) {
+    commands.push(
+      [
+        `${relatedContainer}-state`,
+        containerStateCommand(relatedContainer),
+      ],
+      [
+        `${relatedContainer}-logs`,
+        `docker logs --tail ${LOG_TAIL_LINES} ${shellQuote(relatedContainer)} 2>&1`,
+      ],
+    );
+  }
+
   const sections: string[] = [];
   for (const [label, command] of commands) {
     sections.push(await runDiagnostic(sandbox, label, command));
@@ -49,7 +65,7 @@ export async function collectStartupDiagnostics(
   const header = [
     '[startup-diagnostics]',
     `sandbox_id=${sanitizeDiagnosticText(sandbox.id)}`,
-    `private_ipv6=${target.privateIpv6 || 'unavailable'}`,
+    `private_ipv6=${target.privateIpv6 || 'unused-by-reverse-tunnel'}`,
     `agent_server_port=${target.port}`,
   ].join('\n');
 
@@ -104,12 +120,25 @@ function sandboxHealthCommand(privateIpv6: string | undefined, port: number): st
 
 function containerHealthCommand(containerName: string, port: number): string {
   const python = [
-    'import urllib.request',
+    'import os, urllib.request',
+    "print(f'WORKSPACE_EXISTS={os.path.isdir(\"/workspace\")}')",
     `r=urllib.request.urlopen('http://127.0.0.1:${port}/health', timeout=5)`,
     "print(f'HTTP={r.status}')",
     "print(r.read(2048).decode('utf-8', 'replace'))",
   ].join('; ');
-  return `docker exec ${shellQuote(containerName)} python -c ${shellQuote(python)}`;
+  return `docker exec --workdir / ${shellQuote(containerName)} python -c ${shellQuote(python)}`;
+}
+
+function containerStateCommand(containerName: string): string {
+  return `docker inspect --format ${shellQuote(
+    'status={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} error={{json .State.Error}} started={{.State.StartedAt}} finished={{.State.FinishedAt}}',
+  )} ${shellQuote(containerName)}`;
+}
+
+function containerMountsCommand(containerName: string): string {
+  return `docker inspect --format ${shellQuote(
+    '{{range .Mounts}}{{.Type}} {{.Source}} -> {{.Destination}} rw={{.RW}}{{"\\n"}}{{end}}',
+  )} ${shellQuote(containerName)}`;
 }
 
 export function sanitizeDiagnosticText(value: string): string {

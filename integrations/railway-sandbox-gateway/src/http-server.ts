@@ -1,16 +1,25 @@
 import { timingSafeEqual } from 'node:crypto';
-import { createServer, type IncomingMessage, type ServerResponse } from 'node:http';
+import {
+  createServer,
+  type IncomingMessage,
+  type ServerResponse,
+} from 'node:http';
 import type { Socket } from 'node:net';
 
 import httpProxy from 'http-proxy';
 
 import type { RuntimeService } from './runtime-service.js';
+import type { TunnelUpgradeHandler } from './tunnel.js';
 import type { StartRuntimeRequest } from './types.js';
 
 const MAX_BODY_BYTES = 1_048_576;
 type ProxyServer = ReturnType<typeof httpProxy.createProxyServer>;
 
-export function createGatewayServer(service: RuntimeService, apiKey: string) {
+export function createGatewayServer(
+  service: RuntimeService,
+  apiKey: string,
+  tunnel: TunnelUpgradeHandler,
+) {
   const proxy = httpProxy.createProxyServer({ ws: true, xfwd: true });
   proxy.on('error', (_error, _req, response) => {
     if (response && 'writeHead' in response && !response.headersSent) {
@@ -24,6 +33,7 @@ export function createGatewayServer(service: RuntimeService, apiKey: string) {
   });
 
   server.on('upgrade', (request, socket, head) => {
+    if (tunnel.handleUpgrade(request, socket as Socket, head)) return;
     void handleUpgrade(service, proxy, request, socket as Socket, head);
   });
 
@@ -41,6 +51,11 @@ async function handleHttp(
     const url = new URL(request.url || '/', 'http://gateway.local');
     if (request.method === 'GET' && url.pathname === '/healthz') {
       sendJson(response, 200, { status: 'ok' });
+      return;
+    }
+
+    if (url.pathname.startsWith('/tunnel/')) {
+      sendJson(response, 426, { error: 'websocket upgrade required' });
       return;
     }
 
@@ -180,7 +195,11 @@ async function readJson<T>(request: IncomingMessage): Promise<T> {
   return JSON.parse(Buffer.concat(chunks).toString('utf8')) as T;
 }
 
-function sendJson(response: ServerResponse, status: number, body: unknown): void {
+function sendJson(
+  response: ServerResponse,
+  status: number,
+  body: unknown,
+): void {
   if (response.headersSent) return;
   response.writeHead(status, {
     'content-type': 'application/json; charset=utf-8',
