@@ -27,7 +27,7 @@ Browser
 
 The sandbox initiates the runtime data connection back to the gateway. This avoids treating a Railway Sandbox private IPv6 address as a stable inbound service endpoint while preserving the existing OpenHands path-mode HTTP/WebSocket contract.
 
-The gateway never passes `RAILWAY_TOKEN`, `RAILWAY_API_TOKEN`, or `GATEWAY_API_KEY` into a sandbox. It derives a separate per-runtime tunnel credential with HMAC. That credential rotates on resume and is mounted only into the isolated tunnel sidecar, not the agent-server container.
+The gateway never passes `RAILWAY_TOKEN`, `RAILWAY_API_TOKEN`, or `GATEWAY_API_KEY` into a sandbox. It derives a separate per-runtime tunnel credential with HMAC. That credential rotates on resume and is delivered only to the isolated tunnel sidecar through a temporary Docker env file that is removed from the Sandbox host immediately after the sidecar starts.
 
 The environment supplied by OpenHands for the agent-server is needed for runtime compatibility, so the persistent registry is encrypted with AES-256-GCM using a key derived from `GATEWAY_API_KEY`; the runtime env file inside the sandbox is mode `0600` and deleted after the nested container starts.
 
@@ -51,7 +51,7 @@ The agent-server ports are published only on `127.0.0.1` inside the Sandbox VM. 
 The legacy RemoteRuntime contract expects `pause` and `resume`. Railway's Sandbox SDK exposes create/connect/checkpoint/destroy rather than a direct pause API, so the adapter implements:
 
 ```text
-pause  = close tunnel -> stop nested containers -> remove tunnel credential files -> checkpoint sandbox disk -> destroy VM
+pause  = close tunnel -> stop nested containers -> checkpoint sandbox disk -> destroy VM
 resume = create sandbox from checkpoint -> rotate session + tunnel keys -> recreate agent container -> recreate tunnel -> health check
 ```
 
@@ -121,7 +121,7 @@ SANDBOX_API_KEY=<same value as GATEWAY_API_KEY>
 - Railway credentials and the gateway control secret stay in the gateway service only.
 - The sandbox receives a separate HMAC-derived per-runtime tunnel credential, never `GATEWAY_API_KEY`.
 - Tunnel credentials rotate whenever a paused runtime resumes.
-- The tunnel credential is not mounted into the agent-server container.
+- The tunnel credential is supplied only to the tunnel sidecar, never the agent-server container.
 - Agent-server, VS Code, and worker ports bind only to Sandbox VM loopback.
 - The tunnel sidecar is read-only, drops Linux capabilities, and uses `no-new-privileges`.
 - Agent-server environment is encrypted at rest in the registry.
@@ -130,6 +130,18 @@ SANDBOX_API_KEY=<same value as GATEWAY_API_KEY>
 - UID/GID inputs are validated before they reach shell commands.
 - Runtime environment names and values are validated; newline/NUL injection is rejected.
 - The gateway runtime process runs as a non-root user.
+
+## Automated production lifecycle gate
+
+After deploying a candidate gateway build, open the Railway Console for the gateway service and run:
+
+```bash
+npm run smoke:production
+```
+
+The gate reuses the gateway service's existing secrets and public URL; no secret needs to be copied elsewhere. It performs two complete disposable runtime lifecycles by default, including Agent Server health, authenticated API traffic, `/workspace` write/read, worker routes, VS Code, secret-boundary checks, pause/resume persistence, session-key rotation, old-key rejection, stop, and leak detection.
+
+See [`PRODUCTION_GATE.md`](./PRODUCTION_GATE.md) for the exact assertions and optional overrides.
 
 ## Deployment gate
 
@@ -147,5 +159,7 @@ Do not remove Azure until a real Railway environment passes all of these checks:
 10. Keepalive prevents an actively managed sandbox from expiring solely because browser traffic is proxied.
 11. The sandbox cannot read the gateway/OpenHands Railway service environment.
 12. Stop destroys the sandbox and associated checkpoint.
+
+The automated production lifecycle gate covers most of these checks. Gateway restart/reconnect and a keepalive soak longer than the configured idle timeout remain explicit operational tests before Azure can be removed.
 
 Railway Sandboxes and their TypeScript SDK are still evolving capabilities; pinning `railway@3.10.0` is intentional until the live contract is validated.
