@@ -34,6 +34,9 @@ const TUNNEL_CONTAINER_NAME = 'openhands-sandbox-tunnel';
 const TUNNEL_IMAGE = 'node:22-alpine';
 const TUNNEL_CLIENT_CONTAINER_PATH = '/tmp/openhands-tunnel-client.mjs';
 const TUNNEL_CONFIG_CONTAINER_PATH = '/tmp/openhands-tunnel-config.json';
+const TUNNEL_TMPFS = '/tmp:rw,nosuid,nodev,noexec,size=1m';
+const TUNNEL_BOOTSTRAP =
+  'while [ ! -s "$1" ] || [ ! -s "$2" ]; do sleep 0.1; done; exec node "$1" "$2"';
 
 export type HealthProbe = (url: string) => Promise<boolean>;
 
@@ -372,6 +375,12 @@ export class RuntimeService {
       { timeoutSec: 30 },
     );
 
+    // `docker cp` cannot write into a stopped container whose root filesystem
+    // is marked read-only. Keep the security boundary intact by mounting /tmp
+    // as a tiny in-memory writable filesystem, starting a shell that waits for
+    // both bootstrap files, then copying the files into that live tmpfs. The
+    // tunnel credential therefore never lands in a writable image layer or a
+    // persistent Docker volume.
     const createCommand = [
       'docker create',
       `--name ${TUNNEL_CONTAINER_NAME}`,
@@ -379,10 +388,14 @@ export class RuntimeService {
       '--init',
       '--network host',
       '--read-only',
+      `--tmpfs ${shellQuote(TUNNEL_TMPFS)}`,
       '--security-opt no-new-privileges',
       '--cap-drop ALL',
-      '--entrypoint node',
+      '--entrypoint sh',
       shellQuote(TUNNEL_IMAGE),
+      "'-c'",
+      shellQuote(TUNNEL_BOOTSTRAP),
+      "'openhands-tunnel-bootstrap'",
       shellQuote(TUNNEL_CLIENT_CONTAINER_PATH),
       shellQuote(TUNNEL_CONFIG_CONTAINER_PATH),
     ].join(' ');
@@ -391,6 +404,11 @@ export class RuntimeService {
     ensureExecSuccess(created, 'create sandbox reverse tunnel container');
 
     try {
+      const started = await sandbox.exec(`docker start ${TUNNEL_CONTAINER_NAME}`, {
+        timeoutSec: 30,
+      });
+      ensureExecSuccess(started, 'start sandbox reverse tunnel bootstrap');
+
       const copiedClient = await sandbox.exec(
         `docker cp ${shellQuote(scriptPath)} ${shellQuote(`${TUNNEL_CONTAINER_NAME}:${TUNNEL_CLIENT_CONTAINER_PATH}`)}`,
         { timeoutSec: 30 },
@@ -402,11 +420,6 @@ export class RuntimeService {
         { timeoutSec: 30 },
       );
       ensureExecSuccess(copiedConfig, 'copy sandbox reverse tunnel config');
-
-      const started = await sandbox.exec(`docker start ${TUNNEL_CONTAINER_NAME}`, {
-        timeoutSec: 30,
-      });
-      ensureExecSuccess(started, 'launch sandbox reverse tunnel');
     } finally {
       await this.#removeTunnelFiles(sandbox, record);
     }
