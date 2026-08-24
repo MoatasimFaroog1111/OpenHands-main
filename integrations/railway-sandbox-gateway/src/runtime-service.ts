@@ -1,9 +1,10 @@
 import { createHmac } from 'node:crypto';
 
 import type { GatewayConfig } from './config.js';
-import { parsePrivateIpv6, type PlatformSandbox, type SandboxPlatform } from './platform.js';
+import type { PlatformSandbox, SandboxPlatform } from './platform.js';
 import type { RuntimeRegistry } from './registry.js';
-import { collectStartupDiagnostics } from './startup-diagnostics.js';
+import { buildSandboxTunnelClientSource } from './tunnel-client.js';
+import type { RuntimeTunnel } from './tunnel.js';
 import type {
   ProxyTarget,
   RuntimeRecord,
@@ -19,6 +20,7 @@ const CONTROL_PATHS = new Set([
   'sessions',
   'start',
   'stop',
+  'tunnel',
 ]);
 const AGENT_SERVER_PORT = 60000;
 const SERVICE_PORTS: Record<string, number> = {
@@ -27,6 +29,8 @@ const SERVICE_PORTS: Record<string, number> = {
   'work-2': 12001,
 };
 const CONTAINER_NAME = 'openhands-agent-server';
+const TUNNEL_CONTAINER_NAME = 'openhands-sandbox-tunnel';
+const TUNNEL_IMAGE = 'node:22-alpine';
 
 export type HealthProbe = (url: string) => Promise<boolean>;
 
@@ -34,18 +38,32 @@ export class RuntimeService {
   readonly #config: GatewayConfig;
   readonly #registry: RuntimeRegistry;
   readonly #platform: SandboxPlatform;
+  readonly #tunnel: RuntimeTunnel;
   readonly #probe: HealthProbe;
 
   constructor(
     config: GatewayConfig,
     registry: RuntimeRegistry,
     platform: SandboxPlatform,
+    tunnel: RuntimeTunnel,
     probe: HealthProbe = defaultHealthProbe,
   ) {
     this.#config = config;
     this.#registry = registry;
     this.#platform = platform;
+    this.#tunnel = tunnel;
     this.#probe = probe;
+  }
+
+  async initialize(): Promise<void> {
+    const recoverable = (await this.#registry.list()).filter(
+      (record) =>
+        (record.status === 'running' || record.status === 'starting') &&
+        record.sandboxId,
+    );
+    for (const record of recoverable) {
+      await this.#tunnel.register(record.runtimeId, this.#tunnelKey(record));
+    }
   }
 
   async start(request: StartRuntimeRequest): Promise<RuntimeView> {
@@ -70,15 +88,22 @@ export class RuntimeService {
     try {
       sandbox = await this.#platform.create();
       record.sandboxId = sandbox.id;
-      record.privateIpv6 = await this.#discoverPrivateIpv6(sandbox);
+      record.privateIpv6 = undefined;
       await this.#launchRuntime(sandbox, record);
-      await this.#waitUntilHealthy(sandbox, record.privateIpv6);
+      await this.#tunnel.register(record.runtimeId, this.#tunnelKey(record));
+      await this.#launchTunnel(sandbox, record);
+      await this.#tunnel.waitUntilReady(
+        record.runtimeId,
+        this.#config.startupTimeoutMs,
+      );
+      await this.#waitUntilHealthy(record.runtimeId);
       record.status = 'running';
       record.updatedAt = new Date().toISOString();
       record.lastError = undefined;
       await this.#registry.save(record);
       return this.#toView(record);
     } catch (error) {
+      await this.#tunnel.remove(record.runtimeId).catch(() => undefined);
       record.status = 'error';
       record.lastError = errorMessage(error);
       record.updatedAt = new Date().toISOString();
@@ -105,7 +130,9 @@ export class RuntimeService {
   async listRunning(): Promise<RuntimeView[]> {
     const records = await this.#registry.list();
     return records
-      .filter((record) => record.status === 'running' || record.status === 'starting')
+      .filter(
+        (record) => record.status === 'running' || record.status === 'starting',
+      )
       .map((record) => this.#toView(record));
   }
 
@@ -120,6 +147,7 @@ export class RuntimeService {
         const result = await sandbox.exec('true', { timeoutSec: 10 });
         ensureExecSuccess(result, 'keep Railway sandbox active');
       } catch (error) {
+        await this.#tunnel.remove(record.runtimeId).catch(() => undefined);
         record.status = 'error';
         record.lastError = `sandbox keepalive failed: ${errorMessage(error)}`;
         record.updatedAt = new Date().toISOString();
@@ -136,10 +164,13 @@ export class RuntimeService {
     if (record.status === 'paused') return true;
     if (!record.sandboxId) return false;
 
+    await this.#tunnel.remove(record.runtimeId);
     const sandbox = await this.#platform.connect(record.sandboxId);
-    await sandbox.exec(`docker rm -f ${CONTAINER_NAME} >/dev/null 2>&1 || true`, {
-      timeoutSec: 30,
-    });
+    await sandbox.exec(
+      `docker rm -f ${TUNNEL_CONTAINER_NAME} ${CONTAINER_NAME} >/dev/null 2>&1 || true`,
+      { timeoutSec: 30 },
+    );
+    await this.#removeTunnelFiles(sandbox, record);
 
     const checkpointName = checkpointNameFor(record.sessionId);
     const checkpoint = await sandbox.checkpoint(checkpointName);
@@ -155,7 +186,9 @@ export class RuntimeService {
     await this.#registry.save(record);
 
     if (previousCheckpointId && previousCheckpointId !== checkpoint.id) {
-      await this.#platform.deleteCheckpoint(previousCheckpointId).catch(() => undefined);
+      await this.#platform
+        .deleteCheckpoint(previousCheckpointId)
+        .catch(() => undefined);
     }
     return true;
   }
@@ -175,15 +208,22 @@ export class RuntimeService {
 
       sandbox = await this.#platform.restore(record.checkpointName);
       record.sandboxId = sandbox.id;
-      record.privateIpv6 = await this.#discoverPrivateIpv6(sandbox);
+      record.privateIpv6 = undefined;
       await this.#launchRuntime(sandbox, record);
-      await this.#waitUntilHealthy(sandbox, record.privateIpv6);
+      await this.#tunnel.register(record.runtimeId, this.#tunnelKey(record));
+      await this.#launchTunnel(sandbox, record);
+      await this.#tunnel.waitUntilReady(
+        record.runtimeId,
+        this.#config.startupTimeoutMs,
+      );
+      await this.#waitUntilHealthy(record.runtimeId);
       record.status = 'running';
       record.lastError = undefined;
       record.updatedAt = new Date().toISOString();
       await this.#registry.save(record);
       return this.#toView(record);
     } catch (error) {
+      await this.#tunnel.remove(record.runtimeId).catch(() => undefined);
       record.status = 'error';
       record.lastError = errorMessage(error);
       record.updatedAt = new Date().toISOString();
@@ -197,6 +237,7 @@ export class RuntimeService {
     const record = await this.#findByRuntimeId(runtimeId);
     if (!record) return false;
 
+    await this.#tunnel.remove(record.runtimeId).catch(() => undefined);
     if (record.sandboxId) {
       try {
         const sandbox = await this.#platform.connect(record.sandboxId);
@@ -206,7 +247,9 @@ export class RuntimeService {
       }
     }
     if (record.checkpointId) {
-      await this.#platform.deleteCheckpoint(record.checkpointId).catch(() => undefined);
+      await this.#platform
+        .deleteCheckpoint(record.checkpointId)
+        .catch(() => undefined);
     }
     await this.#registry.delete(record.sessionId);
     return true;
@@ -217,34 +260,30 @@ export class RuntimeService {
     const runtimeId = parts.shift();
     if (!runtimeId || CONTROL_PATHS.has(runtimeId)) return undefined;
     const record = await this.#findByRuntimeId(runtimeId);
-    if (!record || record.status !== 'running' || !record.privateIpv6) return undefined;
+    if (!record || record.status !== 'running') return undefined;
 
     let port = AGENT_SERVER_PORT;
     if (parts[0] && SERVICE_PORTS[parts[0]]) {
       port = SERVICE_PORTS[parts.shift()!];
     }
+    const target = this.#tunnel.target(record.runtimeId, port);
+    if (!target) return undefined;
     const path = `/${parts.join('/')}` || '/';
-    return {
-      target: `http://[${record.privateIpv6}]:${port}`,
-      path,
-    };
+    return { target, path };
   }
 
   async #findByRuntimeId(runtimeId: string): Promise<RuntimeRecord | undefined> {
     const direct = await this.#registry.get(runtimeId);
     if (direct?.runtimeId === runtimeId) return direct;
-    return (await this.#registry.list()).find((record) => record.runtimeId === runtimeId);
+    return (await this.#registry.list()).find(
+      (record) => record.runtimeId === runtimeId,
+    );
   }
 
-  async #discoverPrivateIpv6(sandbox: PlatformSandbox): Promise<string> {
-    const result = await sandbox.exec('cat /proc/net/if_inet6', { timeoutSec: 10 });
-    if (result.exitCode !== 0) {
-      throw new Error(`failed to inspect Railway private network: ${result.stderr}`);
-    }
-    return parsePrivateIpv6(result.stdout);
-  }
-
-  async #launchRuntime(sandbox: PlatformSandbox, record: RuntimeRecord): Promise<void> {
+  async #launchRuntime(
+    sandbox: PlatformSandbox,
+    record: RuntimeRecord,
+  ): Promise<void> {
     const request = record.request;
     const uid = positiveId(request.run_as_user, 10001, 'run_as_user');
     const gid = positiveId(request.run_as_group, 10001, 'run_as_group');
@@ -270,15 +309,13 @@ export class RuntimeService {
     );
     ensureExecSuccess(setup, 'prepare workspace');
 
-    await sandbox.exec(`docker rm -f ${CONTAINER_NAME} >/dev/null 2>&1 || true`, {
-      timeoutSec: 30,
-    });
+    await sandbox.exec(
+      `docker rm -f ${CONTAINER_NAME} >/dev/null 2>&1 || true`,
+      { timeoutSec: 30 },
+    );
 
-    // The legacy RemoteRuntime contract sends an executable followed by its
-    // arguments. Docker treats values after the image as CMD arguments and
-    // appends them to the image ENTRYPOINT, which duplicates the OpenHands
-    // executable for the official agent-server image. Override ENTRYPOINT with
-    // the requested executable and pass only the remaining arguments as CMD.
+    // RemoteRuntime sends an executable followed by argv. Preserve that contract
+    // by overriding the image entrypoint and passing only argv after the image.
     const [entrypoint, ...commandArgs] = request.command;
     if (!entrypoint) throw new Error('command must contain executable');
 
@@ -291,10 +328,10 @@ export class RuntimeService {
       `--workdir ${shellQuote(workingDir)}`,
       `--env-file ${shellQuote(envPath)}`,
       '--volume /workspace:/workspace',
-      '-p "[::]:60000:60000"',
-      '-p "[::]:60001:60001"',
-      '-p "[::]:12000:12000"',
-      '-p "[::]:12001:12001"',
+      '-p "127.0.0.1:60000:60000"',
+      '-p "127.0.0.1:60001:60001"',
+      '-p "127.0.0.1:12000:12000"',
+      '-p "127.0.0.1:12001:12001"',
       `--entrypoint ${shellQuote(entrypoint)}`,
       shellQuote(request.image),
       ...commandArgs.map(shellQuote),
@@ -305,21 +342,69 @@ export class RuntimeService {
     ensureExecSuccess(launched, 'launch OpenHands agent-server container');
   }
 
-  async #waitUntilHealthy(sandbox: PlatformSandbox, ipv6: string): Promise<void> {
+  async #launchTunnel(
+    sandbox: PlatformSandbox,
+    record: RuntimeRecord,
+  ): Promise<void> {
+    const scriptPath = this.#tunnelScriptPath(record);
+    const configPath = this.#tunnelConfigPath(record);
+    await sandbox.writeFile(scriptPath, buildSandboxTunnelClientSource(), 0o400);
+    await sandbox.writeFile(
+      configPath,
+      `${JSON.stringify({
+        url: this.#tunnelUrl(record),
+        token: this.#tunnelKey(record),
+      })}\n`,
+      0o400,
+    );
+
+    await sandbox.exec(
+      `docker rm -f ${TUNNEL_CONTAINER_NAME} >/dev/null 2>&1 || true`,
+      { timeoutSec: 30 },
+    );
+
+    const command = [
+      'docker run -d',
+      `--name ${TUNNEL_CONTAINER_NAME}`,
+      '--pull=missing',
+      '--init',
+      '--network host',
+      '--read-only',
+      '--security-opt no-new-privileges',
+      '--cap-drop ALL',
+      `--volume ${shellQuote(`${scriptPath}:/tunnel/client.mjs:ro`)}`,
+      `--volume ${shellQuote(`${configPath}:/tunnel/config.json:ro`)}`,
+      '--entrypoint node',
+      shellQuote(TUNNEL_IMAGE),
+      "'/tunnel/client.mjs'",
+      "'/tunnel/config.json'",
+    ].join(' ');
+
+    const launched = await sandbox.exec(command, { timeoutSec: 120 });
+    ensureExecSuccess(launched, 'launch sandbox reverse tunnel');
+  }
+
+  async #removeTunnelFiles(
+    sandbox: PlatformSandbox,
+    record: RuntimeRecord,
+  ): Promise<void> {
+    const command = `rm -f ${shellQuote(this.#tunnelScriptPath(record))} ${shellQuote(
+      this.#tunnelConfigPath(record),
+    )}`;
+    await sandbox.exec(command, { timeoutSec: 10 }).catch(() => undefined);
+  }
+
+  async #waitUntilHealthy(runtimeId: string): Promise<void> {
     const deadline = Date.now() + this.#config.startupTimeoutMs;
-    const url = `http://[${ipv6}]:${AGENT_SERVER_PORT}/health`;
+    const target = this.#tunnel.target(runtimeId, AGENT_SERVER_PORT);
+    if (!target) throw new Error(`agent-server tunnel target unavailable: ${runtimeId}`);
+    const url = `${target}/health`;
     while (Date.now() < deadline) {
       if (await this.#probe(url)) return;
       await new Promise((resolve) => setTimeout(resolve, 1_000));
     }
-
-    const diagnostics = await collectStartupDiagnostics(sandbox, {
-      containerName: CONTAINER_NAME,
-      privateIpv6: ipv6,
-      port: AGENT_SERVER_PORT,
-    });
     throw new Error(
-      `agent-server did not become healthy within ${this.#config.startupTimeoutMs}ms\n${diagnostics}`,
+      `agent-server did not become healthy through reverse tunnel within ${this.#config.startupTimeoutMs}ms`,
     );
   }
 
@@ -327,6 +412,29 @@ export class RuntimeService {
     return createHmac('sha256', this.#config.apiKey)
       .update(`${record.sessionId}:${record.sessionKeyVersion}`)
       .digest('base64url');
+  }
+
+  #tunnelKey(record: RuntimeRecord): string {
+    return createHmac('sha256', this.#config.apiKey)
+      .update(`tunnel:${record.sessionId}:${record.sessionKeyVersion}`)
+      .digest('base64url');
+  }
+
+  #tunnelUrl(record: RuntimeRecord): string {
+    const url = new URL(this.#config.tunnelBaseUrl);
+    url.protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
+    url.pathname = `/tunnel/${record.runtimeId}`;
+    url.search = '';
+    url.hash = '';
+    return url.toString();
+  }
+
+  #tunnelScriptPath(record: RuntimeRecord): string {
+    return `/tmp/openhands-tunnel-${record.sessionId}.mjs`;
+  }
+
+  #tunnelConfigPath(record: RuntimeRecord): string {
+    return `/tmp/openhands-tunnel-${record.sessionId}.json`;
   }
 
   #toView(record: RuntimeRecord): RuntimeView {
@@ -358,7 +466,9 @@ function validateStartRequest(request: StartRuntimeRequest): void {
     throw new Error('start request must be an object');
   }
   if (!/^[A-Za-z0-9_-]{1,128}$/.test(request.session_id)) {
-    throw new Error('session_id must contain only letters, numbers, underscore, or dash');
+    throw new Error(
+      'session_id must contain only letters, numbers, underscore, or dash',
+    );
   }
   if (CONTROL_PATHS.has(request.session_id)) {
     throw new Error('session_id collides with a reserved gateway route');
@@ -377,7 +487,9 @@ function validateStartRequest(request: StartRuntimeRequest): void {
   positiveId(request.run_as_group, 10001, 'run_as_group');
   if (
     request.environment !== undefined &&
-    (request.environment === null || Array.isArray(request.environment) || typeof request.environment !== 'object')
+    (request.environment === null ||
+      Array.isArray(request.environment) ||
+      typeof request.environment !== 'object')
   ) {
     throw new Error('environment must be an object');
   }
@@ -400,9 +512,17 @@ function validateEnvironment(environment: Record<string, string>): void {
   }
 }
 
-function positiveId(value: number | undefined, fallback: number, name: string): number {
+function positiveId(
+  value: number | undefined,
+  fallback: number,
+  name: string,
+): number {
   const resolved = value ?? fallback;
-  if (!Number.isInteger(resolved) || resolved <= 0 || resolved > 2_147_483_647) {
+  if (
+    !Number.isInteger(resolved) ||
+    resolved <= 0 ||
+    resolved > 2_147_483_647
+  ) {
     throw new Error(`${name} must be a positive integer`);
   }
   return resolved;

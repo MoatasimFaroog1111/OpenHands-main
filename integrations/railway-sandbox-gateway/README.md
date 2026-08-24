@@ -12,32 +12,54 @@ Browser
                  -> PRIVATE Railway Sandbox VM
                       -> Docker
                            -> OpenHands agent-server container
+                           -> sandbox tunnel sidecar
+                                -> outbound authenticated WebSocket
+                                     -> Gateway loopback tunnel listeners
 
 Browser
   -> Gateway public HTTPS domain /<runtime-id>/...
        -> HTTP/WebSocket reverse proxy
-            -> sandbox private IPv6
-                 -> agent-server / VSCode / worker ports
+            -> Gateway loopback tunnel listener
+                 -> multiplexed reverse tunnel
+                      -> sandbox loopback
+                           -> agent-server / VSCode / worker ports
 ```
 
-The gateway never passes `RAILWAY_TOKEN`, `RAILWAY_API_TOKEN`, or `GATEWAY_API_KEY` into a sandbox. The environment supplied by OpenHands for the agent-server is needed for runtime compatibility, so the persistent registry is encrypted with AES-256-GCM using a key derived from `GATEWAY_API_KEY`; the runtime env file inside the sandbox is mode `0600` and deleted after the nested container starts.
+The sandbox initiates the runtime data connection back to the gateway. This avoids treating a Railway Sandbox private IPv6 address as a stable inbound service endpoint while preserving the existing OpenHands path-mode HTTP/WebSocket contract.
 
-## Why the proxy exists
+The gateway never passes `RAILWAY_TOKEN`, `RAILWAY_API_TOKEN`, or `GATEWAY_API_KEY` into a sandbox. It derives a separate per-runtime tunnel credential with HMAC. That credential rotates on resume and is mounted only into the isolated tunnel sidecar, not the agent-server container.
 
-Railway Sandboxes can join the environment private network, but they do not have a normal service DNS name. The gateway discovers the sandbox ULA IPv6 address after boot and keeps it private. Browser traffic goes through the gateway's public HTTPS domain, while the gateway forwards HTTP and WebSocket traffic over Railway's private network.
+The environment supplied by OpenHands for the agent-server is needed for runtime compatibility, so the persistent registry is encrypted with AES-256-GCM using a key derived from `GATEWAY_API_KEY`; the runtime env file inside the sandbox is mode `0600` and deleted after the nested container starts.
+
+## Why the reverse tunnel exists
+
+Railway Sandboxes can join an environment private network for sandbox-initiated traffic. Railway's interactive port-forwarding feature is designed to expose a service inside a sandbox through a forwarding session. The gateway instead needs a persistent, non-interactive transport that works for both HTTP and WebSocket traffic without installing an account SSH key in the service.
+
+For each runtime, the gateway therefore opens four loopback-only listeners and multiplexes them over one authenticated WebSocket initiated by the sandbox tunnel sidecar:
+
+```text
+60000  agent-server
+60001  VS Code
+12000  worker 1
+12001  worker 2
+```
+
+The agent-server ports are published only on `127.0.0.1` inside the Sandbox VM. They are not exposed as raw Sandbox VM ingress ports.
 
 ## Lifecycle compatibility
 
 The legacy RemoteRuntime contract expects `pause` and `resume`. Railway's Sandbox SDK exposes create/connect/checkpoint/destroy rather than a direct pause API, so the adapter implements:
 
 ```text
-pause  = stop nested agent container -> checkpoint sandbox disk -> destroy VM
-resume = create sandbox from checkpoint -> rotate session API key -> recreate agent container
+pause  = close tunnel -> stop nested containers -> remove tunnel credential files -> checkpoint sandbox disk -> destroy VM
+resume = create sandbox from checkpoint -> rotate session + tunnel keys -> recreate agent container -> recreate tunnel -> health check
 ```
 
-`/workspace` is bind-mounted from the Railway Sandbox VM into the nested agent-server container. The checkpoint therefore preserves conversation/workspace files while the agent process is recreated with a fresh session key.
+`/workspace` is bind-mounted from the Railway Sandbox VM into the nested agent-server container. The checkpoint therefore preserves conversation/workspace files while the agent process is recreated with fresh credentials.
 
-The gateway also performs a small SDK `exec('true')` keepalive against running sandboxes. This is intentionally separate from browser proxy traffic so the Railway Sandbox idle timer is kept active even when normal traffic only traverses the private network.
+The gateway also performs a small SDK `exec('true')` keepalive against running sandboxes. This is intentionally separate from browser proxy traffic so the Railway Sandbox idle timer is kept active even when normal traffic only traverses the reverse tunnel.
+
+When the gateway itself restarts, it decrypts the persisted runtime registry, recreates local tunnel listeners for running runtimes, and accepts the sandbox tunnel client's automatic reconnect.
 
 ## Control API
 
@@ -52,7 +74,9 @@ All control endpoints require `X-API-Key: <GATEWAY_API_KEY>`. `/healthz` is publ
 - `POST /stop`
 - `GET /healthz`
 
-Runtime traffic is exposed as `/<runtime-id>/...` so OpenHands' existing path-mode URL builder can derive VSCode and worker URLs without changes.
+Runtime traffic is exposed as `/<runtime-id>/...` so OpenHands' existing path-mode URL builder can derive VS Code and worker URLs without changes.
+
+`/tunnel/<runtime-id>` is reserved for authenticated WebSocket upgrades from the sandbox tunnel sidecar. The tunnel credential is sent as the first WebSocket frame rather than in the URL, keeping it out of ordinary request URLs and network logs.
 
 ## Railway service configuration
 
@@ -77,6 +101,8 @@ SANDBOX_KEEPALIVE_SECONDS=240
 SANDBOX_STARTUP_TIMEOUT_MS=120000
 ```
 
+`GATEWAY_TUNNEL_BASE_URL` is optional. It defaults to `GATEWAY_PUBLIC_BASE_URL`, which gives the sandbox a normal outbound `wss://` route to the gateway. An explicit Railway private `http://...railway.internal:<port>` value is also accepted when private routing is preferred and validated in the target environment.
+
 The official Railway SDK accepts either `RAILWAY_TOKEN` (recommended project token on-platform) or `RAILWAY_API_TOKEN`. The gateway itself receives `PORT` from Railway.
 
 Configure the OpenHands service with:
@@ -92,13 +118,17 @@ SANDBOX_API_KEY=<same value as GATEWAY_API_KEY>
 
 ## Security boundaries
 
-- Railway credentials and gateway secrets stay in the gateway service only.
+- Railway credentials and the gateway control secret stay in the gateway service only.
+- The sandbox receives a separate HMAC-derived per-runtime tunnel credential, never `GATEWAY_API_KEY`.
+- Tunnel credentials rotate whenever a paused runtime resumes.
+- The tunnel credential is not mounted into the agent-server container.
+- Agent-server, VS Code, and worker ports bind only to Sandbox VM loopback.
+- The tunnel sidecar is read-only, drops Linux capabilities, and uses `no-new-privileges`.
 - Agent-server environment is encrypted at rest in the registry.
 - Gateway control API uses constant-time API-key comparison.
 - Runtime IDs are restricted to a safe path/shell character set.
 - UID/GID inputs are validated before they reach shell commands.
 - Runtime environment names and values are validated; newline/NUL injection is rejected.
-- Railway Sandbox private IPv6 addresses never leave the gateway control plane.
 - The gateway runtime process runs as a non-root user.
 
 ## Deployment gate
@@ -107,15 +137,15 @@ Do not remove Azure until a real Railway environment passes all of these checks:
 
 1. Gateway `/healthz` is healthy.
 2. `POST /start` provisions a PRIVATE Railway Sandbox.
-3. The sandbox private IPv6 is reachable from the gateway.
-4. Docker starts the configured OpenHands agent-server image.
-5. `/health` succeeds through the private IPv6 path.
+3. Docker starts the configured OpenHands agent-server image with ports bound to Sandbox loopback only.
+4. The sandbox tunnel sidecar authenticates back to the gateway without receiving Railway credentials or `GATEWAY_API_KEY`.
+5. Agent-server `/health` succeeds through the reverse tunnel.
 6. Browser HTTP and WebSocket traffic works through `/<runtime-id>/...`.
 7. Agent creates and reads a file under `/workspace`.
-8. Pause/resume preserves that file and rotates the session API key.
-9. Gateway restart preserves and decrypts runtime registry state from `/data`.
+8. Pause/resume preserves that file and rotates both the session API key and tunnel credential.
+9. Gateway restart preserves/decrypts runtime registry state from `/data` and the sandbox tunnel reconnects.
 10. Keepalive prevents an actively managed sandbox from expiring solely because browser traffic is proxied.
 11. The sandbox cannot read the gateway/OpenHands Railway service environment.
 12. Stop destroys the sandbox and associated checkpoint.
 
-Railway Sandboxes and their TypeScript SDK are still beta/priority-boarded capabilities; pinning `railway@3.10.0` is intentional until the live contract is validated.
+Railway Sandboxes and their TypeScript SDK are still evolving capabilities; pinning `railway@3.10.0` is intentional until the live contract is validated.

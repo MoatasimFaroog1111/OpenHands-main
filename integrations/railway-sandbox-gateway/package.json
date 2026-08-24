@@ -14,11 +14,13 @@
   },
   "dependencies": {
     "http-proxy": "1.18.1",
-    "railway": "3.10.0"
+    "railway": "3.10.0",
+    "ws": "8.18.3"
   },
   "devDependencies": {
     "@types/http-proxy": "1.17.16",
     "@types/node": "22.17.1",
+    "@types/ws": "8.18.1",
     "tsx": "4.20.5",
     "typescript": "5.9.2"
   }
