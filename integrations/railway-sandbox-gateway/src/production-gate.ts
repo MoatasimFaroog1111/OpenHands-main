@@ -44,43 +44,38 @@ export interface ProductionGateOptions {
 const DEFAULT_IMAGE = 'ghcr.io/openhands/agent-server:1.29.0-python';
 const MARKER_FILE = '/workspace/railway-production-gate.txt';
 const CONTROL_TIMEOUT_MS = 420_000;
-const RETRY_INTERVAL_MS = 500;
 
 export async function runProductionGate(options: ProductionGateOptions): Promise<void> {
   validateOptions(options);
-  const gatewayUrl = options.gatewayUrl.replace(/\/+$/, '');
-  const baseline = await controlJson<ListResponse>(options, '/list', {
-    method: 'GET',
-  });
-  const baselineIds = new Set(baseline.runtimes.map((runtime) => runtime.runtime_id));
-  const smokeIds = new Set<string>();
+  options = { ...options, gatewayUrl: options.gatewayUrl.replace(/\/+$/, '') };
 
-  logStep(`Gateway health: ${gatewayUrl}/healthz`);
-  const health = await request(`${gatewayUrl}/healthz`, {
+  log(`Gateway health: ${options.gatewayUrl}/healthz`);
+  const health = await fetchSafe(`${options.gatewayUrl}/healthz`, {
     signal: AbortSignal.timeout(10_000),
   });
-  assertStatus(health, [200], 'gateway /healthz');
+  expectStatus(health, [200], 'gateway /healthz');
+
+  const baseline = await controlJson<ListResponse>(options, '/list', { method: 'GET' });
+  const baselineIds = new Set(baseline.runtimes.map((runtime) => runtime.runtime_id));
+  const activeSmokeIds = new Set<string>();
 
   try {
     for (let index = 0; index < options.iterations; index += 1) {
       const sessionId = makeSessionId(index);
-      smokeIds.add(sessionId);
+      activeSmokeIds.add(sessionId);
       await exerciseRuntime(options, sessionId, index + 1);
-      smokeIds.delete(sessionId);
+      activeSmokeIds.delete(sessionId);
     }
   } finally {
-    for (const runtimeId of smokeIds) {
+    for (const runtimeId of activeSmokeIds) {
       await stopBestEffort(options, runtimeId);
     }
   }
 
-  const finalList = await controlJson<ListResponse>(options, '/list', {
-    method: 'GET',
-  });
-  for (const runtime of finalList.runtimes) {
-    if (runtime.runtime_id.startsWith('railwaySmoke')) {
-      throw new Error(`smoke runtime leak detected: ${runtime.runtime_id}`);
-    }
+  const finalList = await controlJson<ListResponse>(options, '/list', { method: 'GET' });
+  const leaked = finalList.runtimes.filter((runtime) => runtime.runtime_id.startsWith('railwaySmoke'));
+  if (leaked.length > 0) {
+    throw new Error(`smoke runtime leak detected: ${leaked.map((item) => item.runtime_id).join(', ')}`);
   }
 
   for (const baselineId of baselineIds) {
@@ -101,10 +96,11 @@ async function exerciseRuntime(
   let stopped = false;
 
   try {
-    logStep(`Runtime ${ordinal}: start ${sessionId}`);
+    log(`Runtime ${ordinal}: start ${sessionId}`);
     const started = await controlJson<RuntimeView>(options, '/start', {
       method: 'POST',
       timeoutMs: options.lifecycleTimeoutMs,
+      expectedStatuses: [201],
       body: {
         image: options.image,
         command: ['/usr/local/bin/openhands-agent-server', '--port', '60000'],
@@ -121,7 +117,6 @@ async function exerciseRuntime(
         run_as_user: options.runAsUser,
         run_as_group: options.runAsGroup,
       },
-      expectedStatuses: [201],
     });
     assertRunningRuntime(started, sessionId);
     runtimeId = started.runtime_id;
@@ -130,41 +125,38 @@ async function exerciseRuntime(
     await assertProtectedApiAccepts(started);
 
     const marker = `RAILWAY_REMOTE_SANDBOX_LIFECYCLE_OK_${sessionId}`;
-    const writeResult = await runBash(
+    const write = await runBash(
       started,
       `printf %s ${shellQuote(marker)} > ${shellQuote(MARKER_FILE)} && cat ${shellQuote(MARKER_FILE)}`,
       options.commandTimeoutSeconds,
     );
-    assertBashSuccess(writeResult, 'write/read workspace marker');
-    assertEqual(writeResult.stdout.trim(), marker, 'workspace marker before pause');
+    assertBashSuccess(write, 'write/read workspace marker');
+    expectEqual(write.stdout.trim(), marker, 'workspace marker before pause');
 
     await assertNoGatewaySecrets(started, options.commandTimeoutSeconds);
-    await startWorkerProbes(started, options.commandTimeoutSeconds);
-    await assertWorkerRoute(started, 'work-1');
-    await assertWorkerRoute(started, 'work-2');
-    await assertVscodeRoute(started);
+    await assertInteractiveServices(started, options.commandTimeoutSeconds);
 
-    logStep(`Runtime ${ordinal}: pause ${runtimeId}`);
+    log(`Runtime ${ordinal}: pause ${runtimeId}`);
     await controlJson(options, '/pause', {
       method: 'POST',
       timeoutMs: options.lifecycleTimeoutMs,
-      body: { runtime_id: runtimeId },
       expectedStatuses: [200],
+      body: { runtime_id: runtimeId },
     });
     const paused = await controlJson<RuntimeView>(
       options,
       `/sessions/${encodeURIComponent(sessionId)}`,
       { method: 'GET' },
     );
-    assertEqual(paused.status, 'paused', 'paused runtime status');
-    assertEqual(paused.session_api_key, '', 'paused runtime session key exposure');
+    expectEqual(paused.status, 'paused', 'paused runtime status');
+    expectEqual(paused.session_api_key, '', 'paused runtime session key exposure');
 
-    logStep(`Runtime ${ordinal}: resume ${runtimeId}`);
+    log(`Runtime ${ordinal}: resume ${runtimeId}`);
     const resumed = await controlJson<RuntimeView>(options, '/resume', {
       method: 'POST',
       timeoutMs: options.lifecycleTimeoutMs,
-      body: { runtime_id: runtimeId },
       expectedStatuses: [200],
+      body: { runtime_id: runtimeId },
     });
     assertRunningRuntime(resumed, sessionId);
     if (resumed.session_api_key === started.session_api_key) {
@@ -175,25 +167,23 @@ async function exerciseRuntime(
     await assertOldSessionKeyRejected(resumed, started.session_api_key);
     await assertProtectedApiAccepts(resumed);
 
-    const readResult = await runBash(
+    const read = await runBash(
       resumed,
       `cat ${shellQuote(MARKER_FILE)}`,
       options.commandTimeoutSeconds,
     );
-    assertBashSuccess(readResult, 'read workspace marker after resume');
-    assertEqual(readResult.stdout.trim(), marker, 'workspace marker after resume');
+    assertBashSuccess(read, 'read workspace marker after resume');
+    expectEqual(read.stdout.trim(), marker, 'workspace marker after resume');
 
-    await startWorkerProbes(resumed, options.commandTimeoutSeconds);
-    await assertWorkerRoute(resumed, 'work-1');
-    await assertWorkerRoute(resumed, 'work-2');
-    await assertVscodeRoute(resumed);
+    await assertNoGatewaySecrets(resumed, options.commandTimeoutSeconds);
+    await assertInteractiveServices(resumed, options.commandTimeoutSeconds);
 
-    logStep(`Runtime ${ordinal}: stop ${runtimeId}`);
+    log(`Runtime ${ordinal}: stop ${runtimeId}`);
     await controlJson(options, '/stop', {
       method: 'POST',
       timeoutMs: options.lifecycleTimeoutMs,
-      body: { runtime_id: runtimeId },
       expectedStatuses: [200],
+      body: { runtime_id: runtimeId },
     });
     stopped = true;
 
@@ -202,45 +192,41 @@ async function exerciseRuntime(
       `/sessions/${encodeURIComponent(sessionId)}`,
       { method: 'GET' },
     );
-    assertStatus(afterStop, [404], 'session lookup after stop');
+    expectStatus(afterStop, [404], 'session lookup after stop');
 
     const list = await controlJson<ListResponse>(options, '/list', { method: 'GET' });
     if (list.runtimes.some((runtime) => runtime.runtime_id === runtimeId)) {
       throw new Error(`runtime remains in /list after stop: ${runtimeId}`);
     }
   } finally {
-    if (runtimeId && !stopped) {
-      await stopBestEffort(options, runtimeId);
-    }
+    if (runtimeId && !stopped) await stopBestEffort(options, runtimeId);
   }
 }
 
 async function assertAgentHealth(runtime: RuntimeView): Promise<void> {
-  const url = requireRuntimeUrl(runtime);
-  const response = await agentRequest(runtime, `${url}/health`, {
+  const response = await agentRequest(runtime, `${runtimeUrl(runtime)}/health`, {
     method: 'GET',
     timeoutMs: 15_000,
   });
-  assertStatus(response, [200], 'agent-server /health through reverse tunnel');
+  expectStatus(response, [200], 'agent-server /health through reverse tunnel');
   const body = (await response.json()) as { status?: string };
-  assertEqual(body.status, 'ok', 'agent-server health body');
+  expectEqual(body.status, 'ok', 'agent-server health body');
 }
 
 async function assertProtectedApiAccepts(runtime: RuntimeView): Promise<void> {
-  const url = requireRuntimeUrl(runtime);
-  const response = await agentRequest(runtime, `${url}/api/bash/bash_events/search?limit=1`, {
-    method: 'GET',
-    timeoutMs: 15_000,
-  });
-  assertStatus(response, [200], 'protected agent API with current session key');
+  const response = await agentRequest(
+    runtime,
+    `${runtimeUrl(runtime)}/api/bash/bash_events/search?limit=1`,
+    { method: 'GET', timeoutMs: 15_000 },
+  );
+  expectStatus(response, [200], 'protected agent API with current session key');
 }
 
 async function assertOldSessionKeyRejected(
   runtime: RuntimeView,
   oldSessionKey: string,
 ): Promise<void> {
-  const url = requireRuntimeUrl(runtime);
-  const response = await request(`${url}/api/bash/start_bash_command`, {
+  const response = await fetchSafe(`${runtimeUrl(runtime)}/api/bash/start_bash_command`, {
     method: 'POST',
     headers: {
       'content-type': 'application/json',
@@ -249,60 +235,72 @@ async function assertOldSessionKeyRejected(
     body: JSON.stringify({ command: 'true', timeout: 5 }),
     signal: AbortSignal.timeout(15_000),
   });
-  assertStatus(response, [401, 403], 'old session key after resume');
+  expectStatus(response, [401, 403], 'old session key after resume');
 }
 
 async function assertNoGatewaySecrets(
   runtime: RuntimeView,
-  commandTimeoutSeconds: number,
+  timeoutSeconds: number,
 ): Promise<void> {
   const command = [
-    'for name in RAILWAY_TOKEN RAILWAY_API_TOKEN GATEWAY_API_KEY; do',
-    '  eval "value=\\${$name-}";',
-    '  if [ -n "$value" ]; then echo "FORBIDDEN_ENV:$name"; exit 41; fi;',
-    'done;',
-    'echo SECURITY_BOUNDARY_OK',
+    'test -z "${RAILWAY_TOKEN:-}"',
+    '&& test -z "${RAILWAY_API_TOKEN:-}"',
+    '&& test -z "${GATEWAY_API_KEY:-}"',
+    '&& echo SECURITY_BOUNDARY_OK',
+    '|| { echo FORBIDDEN_GATEWAY_ENV; exit 41; }',
   ].join(' ');
-  const result = await runBash(runtime, command, commandTimeoutSeconds);
+  const result = await runBash(runtime, command, timeoutSeconds);
   assertBashSuccess(result, 'sandbox secret boundary');
-  assertEqual(result.stdout.trim(), 'SECURITY_BOUNDARY_OK', 'sandbox secret boundary');
+  expectEqual(result.stdout.trim(), 'SECURITY_BOUNDARY_OK', 'sandbox secret boundary');
+}
+
+async function assertInteractiveServices(
+  runtime: RuntimeView,
+  timeoutSeconds: number,
+): Promise<void> {
+  await startWorkerProbes(runtime, timeoutSeconds);
+  await assertWorkerRoute(runtime, 'work-1');
+  await assertWorkerRoute(runtime, 'work-2');
+  await assertVscodeRoute(runtime);
 }
 
 async function startWorkerProbes(
   runtime: RuntimeView,
-  commandTimeoutSeconds: number,
+  timeoutSeconds: number,
 ): Promise<void> {
   const command = [
     'PY="$(command -v python3 || command -v python || true)";',
     'test -n "$PY" || { echo PYTHON_NOT_FOUND; exit 42; };',
     'for port in 12000 12001; do',
-    '  (nohup "$PY" -m http.server "$port" --bind 127.0.0.1 --directory /workspace',
-    '    >"/tmp/railway-worker-$port.log" 2>&1 </dev/null &) ;',
+    '  nohup "$PY" -m http.server "$port" --bind 127.0.0.1 --directory /workspace',
+    '    >"/tmp/railway-worker-$port.log" 2>&1 </dev/null &',
     'done;',
     'sleep 1;',
     'echo WORKER_PROBES_READY',
   ].join(' ');
-  const result = await runBash(runtime, command, commandTimeoutSeconds);
+  const result = await runBash(runtime, command, timeoutSeconds);
   assertBashSuccess(result, 'start worker probes');
   if (!result.stdout.includes('WORKER_PROBES_READY')) {
     throw new Error(`worker probes did not report ready: ${safeSnippet(result.stdout)}`);
   }
 }
 
-async function assertWorkerRoute(runtime: RuntimeView, service: 'work-1' | 'work-2') {
-  const url = `${requireRuntimeUrl(runtime)}/${service}/`;
-  const response = await agentRequest(runtime, url, {
+async function assertWorkerRoute(
+  runtime: RuntimeView,
+  service: 'work-1' | 'work-2',
+): Promise<void> {
+  const response = await agentRequest(runtime, `${runtimeUrl(runtime)}/${service}/`, {
     method: 'GET',
     timeoutMs: 15_000,
   });
-  assertStatus(response, [200], `${service} reverse-tunnel route`);
+  expectStatus(response, [200], `${service} reverse-tunnel route`);
 }
 
 async function assertVscodeRoute(runtime: RuntimeView): Promise<void> {
-  const url = new URL(`${requireRuntimeUrl(runtime)}/vscode/`);
+  const url = new URL(`${runtimeUrl(runtime)}/vscode/`);
   url.searchParams.set('tkn', runtime.session_api_key);
   url.searchParams.set('folder', '/workspace/project');
-  const response = await request(url.toString(), {
+  const response = await fetchSafe(url.toString(), {
     method: 'GET',
     headers: { 'x-session-api-key': runtime.session_api_key },
     redirect: 'manual',
@@ -318,14 +316,14 @@ async function runBash(
   command: string,
   timeoutSeconds: number,
 ): Promise<BashResult> {
-  const url = requireRuntimeUrl(runtime);
-  const startedResponse = await agentRequest(runtime, `${url}/api/bash/start_bash_command`, {
+  const baseUrl = runtimeUrl(runtime);
+  const start = await agentRequest(runtime, `${baseUrl}/api/bash/start_bash_command`, {
     method: 'POST',
     timeoutMs: (timeoutSeconds + 10) * 1_000,
     body: { command, timeout: timeoutSeconds },
   });
-  assertStatus(startedResponse, [200, 201], 'start bash command');
-  const started = (await startedResponse.json()) as { id?: string };
+  expectStatus(start, [200, 201], 'start bash command');
+  const started = (await start.json()) as { id?: string };
   if (!started.id) throw new Error('bash start response did not contain command id');
 
   const deadline = Date.now() + timeoutSeconds * 1_000;
@@ -345,25 +343,22 @@ async function runBash(
 
     const response = await agentRequest(
       runtime,
-      `${url}/api/bash/bash_events/search?${params.toString()}`,
+      `${baseUrl}/api/bash/bash_events/search?${params.toString()}`,
       { method: 'GET', timeoutMs: Math.min(15_000, timeoutSeconds * 1_000) },
     );
-    assertStatus(response, [200], 'poll bash command');
+    expectStatus(response, [200], 'poll bash command');
     const search = (await response.json()) as BashSearchResponse;
 
     for (const event of search.items ?? []) {
       if (event.id && seen.has(event.id)) continue;
       if (event.id) seen.add(event.id);
-      if (typeof event.order === 'number' && event.order > lastOrder) {
-        lastOrder = event.order;
-      }
+      if (typeof event.order === 'number') lastOrder = Math.max(lastOrder, event.order);
       if (event.stdout) stdout += event.stdout;
       if (event.stderr) stderr += event.stderr;
       if (event.exit_code !== null && event.exit_code !== undefined) {
         return { stdout, stderr, exitCode: event.exit_code };
       }
     }
-
     await sleep(100);
   }
 
@@ -373,11 +368,7 @@ async function runBash(
 async function agentRequest(
   runtime: RuntimeView,
   url: string,
-  options: {
-    method: string;
-    timeoutMs: number;
-    body?: unknown;
-  },
+  options: { method: string; timeoutMs: number; body?: unknown },
 ): Promise<Response> {
   const headers: Record<string, string> = {
     'x-session-api-key': runtime.session_api_key,
@@ -387,7 +378,7 @@ async function agentRequest(
     headers['content-type'] = 'application/json';
     body = JSON.stringify(options.body);
   }
-  return request(url, {
+  return fetchSafe(url, {
     method: options.method,
     headers,
     body,
@@ -406,7 +397,7 @@ async function controlJson<T = unknown>(
   },
 ): Promise<T> {
   const response = await controlRequest(options, path, requestOptions);
-  assertStatus(
+  expectStatus(
     response,
     requestOptions.expectedStatuses ?? [200],
     `gateway ${requestOptions.method} ${path}`,
@@ -417,11 +408,7 @@ async function controlJson<T = unknown>(
 async function controlRequest(
   options: ProductionGateOptions,
   path: string,
-  requestOptions: {
-    method: string;
-    timeoutMs?: number;
-    body?: unknown;
-  },
+  requestOptions: { method: string; timeoutMs?: number; body?: unknown },
 ): Promise<Response> {
   const headers: Record<string, string> = { 'x-api-key': options.apiKey };
   let body: string | undefined;
@@ -429,7 +416,7 @@ async function controlRequest(
     headers['content-type'] = 'application/json';
     body = JSON.stringify(requestOptions.body);
   }
-  return request(`${options.gatewayUrl.replace(/\/+$/, '')}${path}`, {
+  return fetchSafe(`${options.gatewayUrl}${path}`, {
     method: requestOptions.method,
     headers,
     body,
@@ -437,7 +424,7 @@ async function controlRequest(
   });
 }
 
-async function request(url: string, init: RequestInit): Promise<Response> {
+async function fetchSafe(url: string, init: RequestInit): Promise<Response> {
   try {
     return await fetch(url, init);
   } catch (error) {
@@ -446,8 +433,8 @@ async function request(url: string, init: RequestInit): Promise<Response> {
 }
 
 function assertRunningRuntime(runtime: RuntimeView, sessionId: string): void {
-  assertEqual(runtime.status, 'running', 'runtime status');
-  assertEqual(runtime.session_id, sessionId, 'runtime session id');
+  expectEqual(runtime.status, 'running', 'runtime status');
+  expectEqual(runtime.session_id, sessionId, 'runtime session id');
   if (!runtime.runtime_id) throw new Error('runtime_id is missing');
   if (!runtime.url) throw new Error('runtime public URL is missing');
   if (!runtime.session_api_key || runtime.session_api_key.length < 16) {
@@ -463,19 +450,19 @@ function assertBashSuccess(result: BashResult, label: string): void {
   }
 }
 
-function assertStatus(response: Response, expected: number[], label: string): void {
+function expectStatus(response: Response, expected: number[], label: string): void {
   if (!expected.includes(response.status)) {
     throw new Error(`${label} returned HTTP ${response.status}; expected ${expected.join('/')}`);
   }
 }
 
-function assertEqual(actual: unknown, expected: unknown, label: string): void {
+function expectEqual(actual: unknown, expected: unknown, label: string): void {
   if (actual !== expected) {
     throw new Error(`${label}: expected ${String(expected)}, got ${String(actual)}`);
   }
 }
 
-function requireRuntimeUrl(runtime: RuntimeView): string {
+function runtimeUrl(runtime: RuntimeView): string {
   if (!runtime.url) throw new Error(`runtime ${runtime.runtime_id} has no public URL`);
   return runtime.url.replace(/\/+$/, '');
 }
@@ -490,7 +477,7 @@ function safeSnippet(value: string): string {
 
 function safeUrl(value: string): string {
   const url = new URL(value);
-  url.search = url.searchParams.has('tkn') ? '?tkn=[REDACTED]' : url.search;
+  if (url.searchParams.has('tkn')) url.search = '?tkn=[REDACTED]';
   return url.toString();
 }
 
@@ -507,7 +494,7 @@ function makeSessionId(index: number): string {
   return `railwaySmoke${index + 1}_${suffix}`;
 }
 
-function logStep(message: string): void {
+function log(message: string): void {
   console.log(`[production-gate] ${message}`);
 }
 
@@ -531,6 +518,7 @@ function validateOptions(options: ProductionGateOptions): void {
     ['runAsUser', options.runAsUser],
     ['runAsGroup', options.runAsGroup],
     ['iterations', options.iterations],
+    ['lifecycleTimeoutMs', options.lifecycleTimeoutMs],
     ['commandTimeoutSeconds', options.commandTimeoutSeconds],
   ] as const) {
     if (!Number.isInteger(value) || value <= 0) throw new Error(`${name} must be positive`);
@@ -547,6 +535,7 @@ export function optionsFromEnvironment(): ProductionGateOptions {
     publicDomain;
   const apiKey =
     process.env.RAILWAY_SMOKE_GATEWAY_API_KEY || process.env.GATEWAY_API_KEY;
+
   if (!gatewayUrl) {
     throw new Error(
       'Set RAILWAY_SMOKE_GATEWAY_URL or GATEWAY_PUBLIC_BASE_URL before running the production gate',
