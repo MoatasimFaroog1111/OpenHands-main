@@ -1,10 +1,10 @@
 export function buildSandboxTunnelClientSource(): string {
-  return String.raw`import fs from 'node:fs';
-import net from 'node:net';
+  return String.raw`import net from 'node:net';
 
-const configPath = process.argv[2];
-if (!configPath) throw new Error('tunnel config path is required');
-const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+const config = {
+  url: process.env.OPENHANDS_TUNNEL_URL,
+  token: process.env.OPENHANDS_TUNNEL_TOKEN,
+};
 if (typeof config.url !== 'string' || typeof config.token !== 'string') {
   throw new Error('invalid tunnel config');
 }

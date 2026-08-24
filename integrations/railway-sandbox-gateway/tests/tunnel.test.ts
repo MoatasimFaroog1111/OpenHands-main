@@ -1,14 +1,11 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { once } from 'node:events';
-import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { createServer } from 'node:http';
 import {
   createConnection,
   createServer as createNetServer,
 } from 'node:net';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import test from 'node:test';
 
 import { WebSocket } from 'ws';
@@ -92,22 +89,18 @@ test('generated sandbox tunnel client runs end to end against the gateway transp
   const address = gateway.address();
   assert.ok(address && typeof address === 'object');
 
-  const temp = await mkdtemp(join(tmpdir(), 'openhands-tunnel-test-'));
-  const scriptPath = join(temp, 'client.mjs');
-  const configPath = join(temp, 'config.json');
-  await writeFile(scriptPath, buildSandboxTunnelClientSource(), { mode: 0o600 });
-  await writeFile(
-    configPath,
-    JSON.stringify({
-      url: `ws://127.0.0.1:${address.port}/tunnel/runtimeClient`,
-      token,
-    }),
-    { mode: 0o600 },
+  const child = spawn(
+    process.execPath,
+    ['--input-type=module', '-e', buildSandboxTunnelClientSource()],
+    {
+      env: {
+        ...process.env,
+        OPENHANDS_TUNNEL_URL: `ws://127.0.0.1:${address.port}/tunnel/runtimeClient`,
+        OPENHANDS_TUNNEL_TOKEN: token,
+      },
+      stdio: ['ignore', 'ignore', 'pipe'],
+    },
   );
-
-  const child = spawn(process.execPath, [scriptPath, configPath], {
-    stdio: ['ignore', 'ignore', 'pipe'],
-  });
   let childStderr = '';
   child.stderr.on('data', (chunk) => {
     childStderr += chunk.toString();
@@ -122,7 +115,6 @@ test('generated sandbox tunnel client runs end to end against the gateway transp
     await manager.close();
     gateway.close();
     echoServer.close();
-    await rm(temp, { recursive: true, force: true });
   });
 
   await Promise.race([

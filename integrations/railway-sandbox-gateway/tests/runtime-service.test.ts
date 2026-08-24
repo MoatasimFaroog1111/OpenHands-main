@@ -196,7 +196,7 @@ test('start, keepalive, pause, resume and stop preserve the remote runtime contr
     data.includes('wss://gateway.example.com/tunnel/sessionABC123'),
   );
   assert.ok(tunnelConfig);
-  assert.equal(tunnelConfig.mode, 0o400);
+  assert.equal(tunnelConfig.mode, 0o600);
   assert.doesNotMatch(tunnelConfig.data, new RegExp(config.apiKey));
   assert.equal(tunnel.registered.length, 1);
 

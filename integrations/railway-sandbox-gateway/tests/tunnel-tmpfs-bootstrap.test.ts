@@ -37,15 +37,18 @@ class MemoryRegistry implements RuntimeRegistry {
 }
 
 class RecordingSandbox implements PlatformSandbox {
-  readonly id = 'sandbox-tmpfs-test';
+  readonly id = 'sandbox-env-test';
   readonly commands: string[] = [];
+  readonly files = new Map<string, { data: string; mode?: number }>();
 
   async exec(command: string): Promise<ExecResult> {
     this.commands.push(command);
     return { exitCode: 0, stdout: '', stderr: '' };
   }
 
-  async writeFile(): Promise<void> {}
+  async writeFile(path: string, data: string, mode?: number): Promise<void> {
+    this.files.set(path, { data, mode });
+  }
 
   async checkpoint(name: string): Promise<PlatformCheckpoint> {
     return { id: `checkpoint-${name}`, key: name };
@@ -109,12 +112,12 @@ const request: StartRuntimeRequest = {
   command: ['/usr/local/bin/openhands-agent-server', '--port', '60000'],
   working_dir: '/workspace',
   environment: {},
-  session_id: 'tmpfsBootstrapSession',
+  session_id: 'envBootstrapSession',
   run_as_user: 10001,
   run_as_group: 10001,
 };
 
-test('streams bootstrap files into live tmpfs without docker cp', async () => {
+test('launches read-only tunnel without copying or writing inside sidecar', async () => {
   const registry = new MemoryRegistry();
   const platform = new RecordingPlatform();
   const tunnel = new ReadyTunnel();
@@ -129,41 +132,53 @@ test('streams bootstrap files into live tmpfs without docker cp', async () => {
   await service.start(structuredClone(request));
 
   const commands = platform.sandbox.commands;
-  const createIndex = commands.findIndex(
+  const tunnelRunIndex = commands.findIndex(
     (command) =>
-      command.startsWith('docker create') &&
+      command.startsWith('docker run -d') &&
       command.includes('--name openhands-sandbox-tunnel'),
   );
-  const startIndex = commands.findIndex(
-    (command) => command === 'docker start openhands-sandbox-tunnel',
-  );
-  const streamClientIndex = commands.findIndex(
-    (command) =>
-      command.includes('docker exec -i') && command.includes('tunnel-client.mjs'),
-  );
-  const streamConfigIndex = commands.findIndex(
-    (command) =>
-      command.includes('docker exec -i') && command.includes('tunnel-config.json'),
-  );
+  assert.ok(tunnelRunIndex >= 0);
 
-  assert.ok(createIndex >= 0);
-  assert.ok(startIndex > createIndex);
-  assert.ok(streamClientIndex > startIndex);
-  assert.ok(streamConfigIndex > streamClientIndex);
+  const tunnelRun = commands[tunnelRunIndex];
+  assert.match(tunnelRun, /--network host/);
+  assert.match(tunnelRun, /--read-only/);
+  assert.match(tunnelRun, /--security-opt no-new-privileges/);
+  assert.match(tunnelRun, /--cap-drop ALL/);
+  assert.match(tunnelRun, /--env-file/);
+  assert.match(tunnelRun, /--entrypoint node/);
+  assert.match(tunnelRun, /'node:22-alpine'/);
+  assert.match(tunnelRun, /'--input-type=module'/);
+  assert.match(tunnelRun, /'-e'/);
+  assert.doesNotMatch(tunnelRun, /--tmpfs/);
+  assert.doesNotMatch(tunnelRun, /OPENHANDS_TUNNEL_TOKEN=/);
+  assert.doesNotMatch(tunnelRun, new RegExp(config.apiKey));
+
   assert.equal(commands.some((command) => command.startsWith('docker cp ')), false);
-
-  const createCommand = commands[createIndex];
-  assert.match(createCommand, /--read-only/);
-  assert.match(
-    createCommand,
-    /--tmpfs '\/tmp:rw,nosuid,nodev,noexec,size=1m'/,
+  assert.equal(commands.some((command) => command.includes('docker exec -i')), false);
+  assert.equal(
+    commands.some(
+      (command) =>
+        command.startsWith('docker create') &&
+        command.includes('openhands-sandbox-tunnel'),
+    ),
+    false,
   );
-  assert.match(createCommand, /--entrypoint sh/);
-  assert.match(createCommand, /while \[ ! -s/);
-  assert.match(createCommand, /exec node/);
 
-  const streamClientCommand = commands[streamClientIndex];
-  assert.match(streamClientCommand, /cat '.*tunnel-.*\.mjs' \| docker exec -i/);
-  assert.match(streamClientCommand, /chmod 0400/);
-  assert.doesNotMatch(streamClientCommand, /gateway-secret-that-is-at-least-32-characters/);
+  const tunnelEnvEntry = [...platform.sandbox.files.entries()].find(([, file]) =>
+    file.data.includes('OPENHANDS_TUNNEL_URL='),
+  );
+  assert.ok(tunnelEnvEntry);
+  const [envPath, tunnelEnvFile] = tunnelEnvEntry;
+  assert.equal(tunnelEnvFile.mode, 0o600);
+  assert.match(
+    tunnelEnvFile.data,
+    /OPENHANDS_TUNNEL_URL=wss:\/\/gateway\.example\.com\/tunnel\/envBootstrapSession/,
+  );
+  assert.match(tunnelEnvFile.data, /OPENHANDS_TUNNEL_TOKEN=[A-Za-z0-9_-]{20,}/);
+  assert.doesNotMatch(tunnelEnvFile.data, new RegExp(config.apiKey));
+
+  const cleanupIndex = commands.findIndex((command) =>
+    command.includes(`rm -f '${envPath}'`),
+  );
+  assert.ok(cleanupIndex > tunnelRunIndex);
 });
