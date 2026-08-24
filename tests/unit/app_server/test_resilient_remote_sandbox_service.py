@@ -52,7 +52,9 @@ async def test_start_request_uses_startup_specific_timeout() -> None:
 async def test_non_start_request_keeps_shared_client_timeout_policy() -> None:
     client = AsyncMock(spec=httpx.AsyncClient)
     request = httpx.Request('GET', 'https://runtime.example/list')
-    client.request.return_value = httpx.Response(200, request=request, json={'runtimes': []})
+    client.request.return_value = httpx.Response(
+        200, request=request, json={'runtimes': []}
+    )
     service = _service(client)
 
     await service._send_runtime_api_request('GET', '/list')
