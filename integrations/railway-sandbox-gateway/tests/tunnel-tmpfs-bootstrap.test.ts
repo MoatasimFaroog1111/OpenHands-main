@@ -114,7 +114,7 @@ const request: StartRuntimeRequest = {
   run_as_group: 10001,
 };
 
-test('starts read-only tunnel sidecar before copying bootstrap files into writable tmpfs', async () => {
+test('streams bootstrap files into live tmpfs without docker cp', async () => {
   const registry = new MemoryRegistry();
   const platform = new RecordingPlatform();
   const tunnel = new ReadyTunnel();
@@ -137,19 +137,20 @@ test('starts read-only tunnel sidecar before copying bootstrap files into writab
   const startIndex = commands.findIndex(
     (command) => command === 'docker start openhands-sandbox-tunnel',
   );
-  const copyClientIndex = commands.findIndex(
+  const streamClientIndex = commands.findIndex(
     (command) =>
-      command.startsWith('docker cp ') && command.includes('tunnel-client.mjs'),
+      command.includes('docker exec -i') && command.includes('tunnel-client.mjs'),
   );
-  const copyConfigIndex = commands.findIndex(
+  const streamConfigIndex = commands.findIndex(
     (command) =>
-      command.startsWith('docker cp ') && command.includes('tunnel-config.json'),
+      command.includes('docker exec -i') && command.includes('tunnel-config.json'),
   );
 
   assert.ok(createIndex >= 0);
   assert.ok(startIndex > createIndex);
-  assert.ok(copyClientIndex > startIndex);
-  assert.ok(copyConfigIndex > copyClientIndex);
+  assert.ok(streamClientIndex > startIndex);
+  assert.ok(streamConfigIndex > streamClientIndex);
+  assert.equal(commands.some((command) => command.startsWith('docker cp ')), false);
 
   const createCommand = commands[createIndex];
   assert.match(createCommand, /--read-only/);
@@ -160,4 +161,9 @@ test('starts read-only tunnel sidecar before copying bootstrap files into writab
   assert.match(createCommand, /--entrypoint sh/);
   assert.match(createCommand, /while \[ ! -s/);
   assert.match(createCommand, /exec node/);
+
+  const streamClientCommand = commands[streamClientIndex];
+  assert.match(streamClientCommand, /cat '.*tunnel-.*\.mjs' \| docker exec -i/);
+  assert.match(streamClientCommand, /chmod 0400/);
+  assert.doesNotMatch(streamClientCommand, /gateway-secret-that-is-at-least-32-characters/);
 });
