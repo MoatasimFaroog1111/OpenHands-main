@@ -3,6 +3,7 @@ import { createHmac } from 'node:crypto';
 import type { GatewayConfig } from './config.js';
 import type { PlatformSandbox, SandboxPlatform } from './platform.js';
 import type { RuntimeRegistry } from './registry.js';
+import { collectStartupDiagnostics } from './startup-diagnostics.js';
 import { buildSandboxTunnelClientSource } from './tunnel-client.js';
 import type { RuntimeTunnel } from './tunnel.js';
 import type {
@@ -31,6 +32,8 @@ const SERVICE_PORTS: Record<string, number> = {
 const CONTAINER_NAME = 'openhands-agent-server';
 const TUNNEL_CONTAINER_NAME = 'openhands-sandbox-tunnel';
 const TUNNEL_IMAGE = 'node:22-alpine';
+const TUNNEL_CLIENT_CONTAINER_PATH = '/tmp/openhands-tunnel-client.mjs';
+const TUNNEL_CONFIG_CONTAINER_PATH = '/tmp/openhands-tunnel-config.json';
 
 export type HealthProbe = (url: string) => Promise<boolean>;
 
@@ -103,13 +106,16 @@ export class RuntimeService {
       await this.#registry.save(record);
       return this.#toView(record);
     } catch (error) {
+      const failure = sandbox
+        ? await this.#startupFailureWithDiagnostics(sandbox, error)
+        : error;
       await this.#tunnel.remove(record.runtimeId).catch(() => undefined);
       record.status = 'error';
-      record.lastError = errorMessage(error);
+      record.lastError = errorMessage(failure);
       record.updatedAt = new Date().toISOString();
       await this.#registry.save(record);
       if (sandbox) await sandbox.destroy().catch(() => undefined);
-      throw error;
+      throw failure;
     }
   }
 
@@ -223,13 +229,16 @@ export class RuntimeService {
       await this.#registry.save(record);
       return this.#toView(record);
     } catch (error) {
+      const failure = sandbox
+        ? await this.#startupFailureWithDiagnostics(sandbox, error)
+        : error;
       await this.#tunnel.remove(record.runtimeId).catch(() => undefined);
       record.status = 'error';
-      record.lastError = errorMessage(error);
+      record.lastError = errorMessage(failure);
       record.updatedAt = new Date().toISOString();
       await this.#registry.save(record);
       if (sandbox) await sandbox.destroy().catch(() => undefined);
-      throw error;
+      throw failure;
     }
   }
 
@@ -363,8 +372,8 @@ export class RuntimeService {
       { timeoutSec: 30 },
     );
 
-    const command = [
-      'docker run -d',
+    const createCommand = [
+      'docker create',
       `--name ${TUNNEL_CONTAINER_NAME}`,
       '--pull=missing',
       '--init',
@@ -372,16 +381,35 @@ export class RuntimeService {
       '--read-only',
       '--security-opt no-new-privileges',
       '--cap-drop ALL',
-      `--volume ${shellQuote(`${scriptPath}:/tunnel/client.mjs:ro`)}`,
-      `--volume ${shellQuote(`${configPath}:/tunnel/config.json:ro`)}`,
       '--entrypoint node',
       shellQuote(TUNNEL_IMAGE),
-      "'/tunnel/client.mjs'",
-      "'/tunnel/config.json'",
+      shellQuote(TUNNEL_CLIENT_CONTAINER_PATH),
+      shellQuote(TUNNEL_CONFIG_CONTAINER_PATH),
     ].join(' ');
 
-    const launched = await sandbox.exec(command, { timeoutSec: 120 });
-    ensureExecSuccess(launched, 'launch sandbox reverse tunnel');
+    const created = await sandbox.exec(createCommand, { timeoutSec: 120 });
+    ensureExecSuccess(created, 'create sandbox reverse tunnel container');
+
+    try {
+      const copiedClient = await sandbox.exec(
+        `docker cp ${shellQuote(scriptPath)} ${shellQuote(`${TUNNEL_CONTAINER_NAME}:${TUNNEL_CLIENT_CONTAINER_PATH}`)}`,
+        { timeoutSec: 30 },
+      );
+      ensureExecSuccess(copiedClient, 'copy sandbox reverse tunnel client');
+
+      const copiedConfig = await sandbox.exec(
+        `docker cp ${shellQuote(configPath)} ${shellQuote(`${TUNNEL_CONTAINER_NAME}:${TUNNEL_CONFIG_CONTAINER_PATH}`)}`,
+        { timeoutSec: 30 },
+      );
+      ensureExecSuccess(copiedConfig, 'copy sandbox reverse tunnel config');
+
+      const started = await sandbox.exec(`docker start ${TUNNEL_CONTAINER_NAME}`, {
+        timeoutSec: 30,
+      });
+      ensureExecSuccess(started, 'launch sandbox reverse tunnel');
+    } finally {
+      await this.#removeTunnelFiles(sandbox, record);
+    }
   }
 
   async #removeTunnelFiles(
@@ -406,6 +434,24 @@ export class RuntimeService {
     throw new Error(
       `agent-server did not become healthy through reverse tunnel within ${this.#config.startupTimeoutMs}ms`,
     );
+  }
+
+  async #startupFailureWithDiagnostics(
+    sandbox: PlatformSandbox,
+    error: unknown,
+  ): Promise<Error> {
+    try {
+      const diagnostics = await collectStartupDiagnostics(sandbox, {
+        containerName: CONTAINER_NAME,
+        relatedContainers: [TUNNEL_CONTAINER_NAME],
+        port: AGENT_SERVER_PORT,
+      });
+      return new Error(`${errorMessage(error)}\n${diagnostics}`);
+    } catch (diagnosticError) {
+      return new Error(
+        `${errorMessage(error)}\n[startup-diagnostics]\ncollector_error=${errorMessage(diagnosticError)}`,
+      );
+    }
   }
 
   #sessionKey(record: RuntimeRecord): string {
