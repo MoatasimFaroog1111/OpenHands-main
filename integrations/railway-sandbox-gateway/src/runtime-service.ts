@@ -105,11 +105,11 @@ export class RuntimeService {
     } catch (error) {
       await this.#tunnel.remove(record.runtimeId).catch(() => undefined);
       record.status = 'error';
-      record.lastError = errorMessage(error);
+      record.lastError = errorMessage(failure);
       record.updatedAt = new Date().toISOString();
       await this.#registry.save(record);
       if (sandbox) await sandbox.destroy().catch(() => undefined);
-      throw error;
+      throw failure;
     }
   }
 
@@ -225,11 +225,11 @@ export class RuntimeService {
     } catch (error) {
       await this.#tunnel.remove(record.runtimeId).catch(() => undefined);
       record.status = 'error';
-      record.lastError = errorMessage(error);
+      record.lastError = errorMessage(failure);
       record.updatedAt = new Date().toISOString();
       await this.#registry.save(record);
       if (sandbox) await sandbox.destroy().catch(() => undefined);
-      throw error;
+      throw failure;
     }
   }
 
@@ -406,6 +406,24 @@ export class RuntimeService {
     throw new Error(
       `agent-server did not become healthy through reverse tunnel within ${this.#config.startupTimeoutMs}ms`,
     );
+  }
+
+  async #startupFailureWithDiagnostics(
+    sandbox: PlatformSandbox,
+    error: unknown,
+  ): Promise<Error> {
+    try {
+      const diagnostics = await collectStartupDiagnostics(sandbox, {
+        containerName: CONTAINER_NAME,
+        relatedContainers: [TUNNEL_CONTAINER_NAME],
+        port: AGENT_SERVER_PORT,
+      });
+      return new Error(`${errorMessage(error)}\n${diagnostics}`);
+    } catch (diagnosticError) {
+      return new Error(
+        `${errorMessage(error)}\n[startup-diagnostics]\ncollector_error=${errorMessage(diagnosticError)}`,
+      );
+    }
   }
 
   #sessionKey(record: RuntimeRecord): string {
