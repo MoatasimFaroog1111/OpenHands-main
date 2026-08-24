@@ -32,11 +32,8 @@ const SERVICE_PORTS: Record<string, number> = {
 const CONTAINER_NAME = 'openhands-agent-server';
 const TUNNEL_CONTAINER_NAME = 'openhands-sandbox-tunnel';
 const TUNNEL_IMAGE = 'node:22-alpine';
-const TUNNEL_CLIENT_CONTAINER_PATH = '/tmp/openhands-tunnel-client.mjs';
-const TUNNEL_CONFIG_CONTAINER_PATH = '/tmp/openhands-tunnel-config.json';
-const TUNNEL_TMPFS = '/tmp:rw,nosuid,nodev,noexec,size=1m';
-const TUNNEL_BOOTSTRAP =
-  'while [ ! -s "$1" ] || [ ! -s "$2" ]; do sleep 0.1; done; exec node "$1" "$2"';
+const TUNNEL_URL_ENV = 'OPENHANDS_TUNNEL_URL';
+const TUNNEL_TOKEN_ENV = 'OPENHANDS_TUNNEL_TOKEN';
 
 export type HealthProbe = (url: string) => Promise<boolean>;
 
@@ -179,7 +176,7 @@ export class RuntimeService {
       `docker rm -f ${TUNNEL_CONTAINER_NAME} ${CONTAINER_NAME} >/dev/null 2>&1 || true`,
       { timeoutSec: 30 },
     );
-    await this.#removeTunnelFiles(sandbox, record);
+    await this.#removeTunnelEnvFile(sandbox, record);
 
     const checkpointName = checkpointNameFor(record.sessionId);
     const checkpoint = await sandbox.checkpoint(checkpointName);
@@ -358,16 +355,18 @@ export class RuntimeService {
     sandbox: PlatformSandbox,
     record: RuntimeRecord,
   ): Promise<void> {
-    const scriptPath = this.#tunnelScriptPath(record);
-    const configPath = this.#tunnelConfigPath(record);
-    await sandbox.writeFile(scriptPath, buildSandboxTunnelClientSource(), 0o400);
+    const envPath = this.#tunnelEnvPath(record);
+    const tunnelEnv = {
+      [TUNNEL_URL_ENV]: this.#tunnelUrl(record),
+      [TUNNEL_TOKEN_ENV]: this.#tunnelKey(record),
+    };
+    validateEnvironment(tunnelEnv);
     await sandbox.writeFile(
-      configPath,
-      `${JSON.stringify({
-        url: this.#tunnelUrl(record),
-        token: this.#tunnelKey(record),
-      })}\n`,
-      0o400,
+      envPath,
+      `${Object.entries(tunnelEnv)
+        .map(([key, value]) => `${key}=${value}`)
+        .join('\n')}\n`,
+      0o600,
     );
 
     await sandbox.exec(
@@ -375,71 +374,43 @@ export class RuntimeService {
       { timeoutSec: 30 },
     );
 
-    // Docker rejects `docker cp` whenever ReadonlyRootfs=true, even when the
-    // destination itself is a writable tmpfs. Keep the sidecar root filesystem
-    // read-only and stream the bootstrap files over stdin into the live /tmp
-    // tmpfs with `docker exec -i`. File contents and the tunnel credential never
-    // appear in the command line, image layer, or a persistent Docker volume.
-    const createCommand = [
-      'docker create',
+    // Railway's nested Docker runtime keeps the sidecar root filesystem fully
+    // read-only, including attempted tmpfs bootstrap paths. Avoid filesystem
+    // bootstrap entirely: Docker reads the short-lived env file when creating
+    // the container, then Node executes the non-secret client source directly.
+    // The env file is removed from the Sandbox host immediately after docker run.
+    const command = [
+      'docker run -d',
       `--name ${TUNNEL_CONTAINER_NAME}`,
       '--pull=missing',
       '--init',
       '--network host',
       '--read-only',
-      `--tmpfs ${shellQuote(TUNNEL_TMPFS)}`,
       '--security-opt no-new-privileges',
       '--cap-drop ALL',
-      '--entrypoint sh',
+      `--env-file ${shellQuote(envPath)}`,
+      '--entrypoint node',
       shellQuote(TUNNEL_IMAGE),
-      "'-c'",
-      shellQuote(TUNNEL_BOOTSTRAP),
-      "'openhands-tunnel-bootstrap'",
-      shellQuote(TUNNEL_CLIENT_CONTAINER_PATH),
-      shellQuote(TUNNEL_CONFIG_CONTAINER_PATH),
+      "'--input-type=module'",
+      "'-e'",
+      shellQuote(buildSandboxTunnelClientSource()),
     ].join(' ');
 
-    const created = await sandbox.exec(createCommand, { timeoutSec: 120 });
-    ensureExecSuccess(created, 'create sandbox reverse tunnel container');
-
-    try {
-      const started = await sandbox.exec(`docker start ${TUNNEL_CONTAINER_NAME}`, {
-        timeoutSec: 30,
-      });
-      ensureExecSuccess(started, 'start sandbox reverse tunnel bootstrap');
-
-      const streamedClient = await sandbox.exec(
-        streamFileIntoContainerCommand(
-          TUNNEL_CONTAINER_NAME,
-          scriptPath,
-          TUNNEL_CLIENT_CONTAINER_PATH,
-        ),
-        { timeoutSec: 30 },
-      );
-      ensureExecSuccess(streamedClient, 'stream sandbox reverse tunnel client');
-
-      const streamedConfig = await sandbox.exec(
-        streamFileIntoContainerCommand(
-          TUNNEL_CONTAINER_NAME,
-          configPath,
-          TUNNEL_CONFIG_CONTAINER_PATH,
-        ),
-        { timeoutSec: 30 },
-      );
-      ensureExecSuccess(streamedConfig, 'stream sandbox reverse tunnel config');
-    } finally {
-      await this.#removeTunnelFiles(sandbox, record);
-    }
+    const launched = await sandbox
+      .exec(command, { timeoutSec: 120 })
+      .finally(() => this.#removeTunnelEnvFile(sandbox, record));
+    ensureExecSuccess(launched, 'launch sandbox reverse tunnel');
   }
 
-  async #removeTunnelFiles(
+  async #removeTunnelEnvFile(
     sandbox: PlatformSandbox,
     record: RuntimeRecord,
   ): Promise<void> {
-    const command = `rm -f ${shellQuote(this.#tunnelScriptPath(record))} ${shellQuote(
-      this.#tunnelConfigPath(record),
-    )}`;
-    await sandbox.exec(command, { timeoutSec: 10 }).catch(() => undefined);
+    await sandbox
+      .exec(`rm -f ${shellQuote(this.#tunnelEnvPath(record))}`, {
+        timeoutSec: 10,
+      })
+      .catch(() => undefined);
   }
 
   async #waitUntilHealthy(runtimeId: string): Promise<void> {
@@ -495,12 +466,8 @@ export class RuntimeService {
     return url.toString();
   }
 
-  #tunnelScriptPath(record: RuntimeRecord): string {
-    return `/tmp/openhands-tunnel-${record.sessionId}.mjs`;
-  }
-
-  #tunnelConfigPath(record: RuntimeRecord): string {
-    return `/tmp/openhands-tunnel-${record.sessionId}.json`;
+  #tunnelEnvPath(record: RuntimeRecord): string {
+    return `/tmp/openhands-tunnel-${record.sessionId}.env`;
   }
 
   #toView(record: RuntimeRecord): RuntimeView {
@@ -592,20 +559,6 @@ function positiveId(
     throw new Error(`${name} must be a positive integer`);
   }
   return resolved;
-}
-
-function streamFileIntoContainerCommand(
-  containerName: string,
-  sourcePath: string,
-  destinationPath: string,
-): string {
-  const writer = [
-    'umask 077',
-    `cat > ${shellQuote(destinationPath)}`,
-    `chmod 0400 ${shellQuote(destinationPath)}`,
-    `test -s ${shellQuote(destinationPath)}`,
-  ].join('; ');
-  return `cat ${shellQuote(sourcePath)} | docker exec -i ${shellQuote(containerName)} sh -c ${shellQuote(writer)}`;
 }
 
 function shellQuote(value: string): string {
