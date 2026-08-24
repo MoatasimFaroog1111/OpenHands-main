@@ -14,37 +14,37 @@ export async function collectStartupDiagnostics(
   sandbox: PlatformSandbox,
   target: StartupDiagnosticTarget,
 ): Promise<string> {
-  const sections = await Promise.all([
-    runDiagnostic(
-      sandbox,
+  const commands: Array<[label: string, command: string]> = [
+    [
       'sandbox-health',
       sandboxHealthCommand(target.privateIpv6, target.port),
-    ),
-    runDiagnostic(
-      sandbox,
+    ],
+    [
       'container-health',
       containerHealthCommand(target.containerName, target.port),
-    ),
-    runDiagnostic(
-      sandbox,
+    ],
+    [
       'container-state',
       `docker inspect --format ${shellQuote(
         'status={{.State.Status}} exit={{.State.ExitCode}} oom={{.State.OOMKilled}} error={{json .State.Error}} started={{.State.StartedAt}} finished={{.State.FinishedAt}}',
       )} ${shellQuote(target.containerName)}`,
-    ),
-    runDiagnostic(
-      sandbox,
+    ],
+    [
       'docker-ps',
       `docker ps -a --filter ${shellQuote(`name=^/${target.containerName}$`)} --format ${shellQuote(
         '{{.Names}}\t{{.Image}}\t{{.Status}}\t{{.Ports}}',
       )}`,
-    ),
-    runDiagnostic(
-      sandbox,
+    ],
+    [
       'docker-logs',
       `docker logs --tail ${LOG_TAIL_LINES} ${shellQuote(target.containerName)} 2>&1`,
-    ),
-  ]);
+    ],
+  ];
+
+  const sections: string[] = [];
+  for (const [label, command] of commands) {
+    sections.push(await runDiagnostic(sandbox, label, command));
+  }
 
   const header = [
     '[startup-diagnostics]',
