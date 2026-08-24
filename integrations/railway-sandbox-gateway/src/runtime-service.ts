@@ -375,12 +375,11 @@ export class RuntimeService {
       { timeoutSec: 30 },
     );
 
-    // `docker cp` cannot write into a stopped container whose root filesystem
-    // is marked read-only. Keep the security boundary intact by mounting /tmp
-    // as a tiny in-memory writable filesystem, starting a shell that waits for
-    // both bootstrap files, then copying the files into that live tmpfs. The
-    // tunnel credential therefore never lands in a writable image layer or a
-    // persistent Docker volume.
+    // Docker rejects `docker cp` whenever ReadonlyRootfs=true, even when the
+    // destination itself is a writable tmpfs. Keep the sidecar root filesystem
+    // read-only and stream the bootstrap files over stdin into the live /tmp
+    // tmpfs with `docker exec -i`. File contents and the tunnel credential never
+    // appear in the command line, image layer, or a persistent Docker volume.
     const createCommand = [
       'docker create',
       `--name ${TUNNEL_CONTAINER_NAME}`,
@@ -409,17 +408,25 @@ export class RuntimeService {
       });
       ensureExecSuccess(started, 'start sandbox reverse tunnel bootstrap');
 
-      const copiedClient = await sandbox.exec(
-        `docker cp ${shellQuote(scriptPath)} ${shellQuote(`${TUNNEL_CONTAINER_NAME}:${TUNNEL_CLIENT_CONTAINER_PATH}`)}`,
+      const streamedClient = await sandbox.exec(
+        streamFileIntoContainerCommand(
+          TUNNEL_CONTAINER_NAME,
+          scriptPath,
+          TUNNEL_CLIENT_CONTAINER_PATH,
+        ),
         { timeoutSec: 30 },
       );
-      ensureExecSuccess(copiedClient, 'copy sandbox reverse tunnel client');
+      ensureExecSuccess(streamedClient, 'stream sandbox reverse tunnel client');
 
-      const copiedConfig = await sandbox.exec(
-        `docker cp ${shellQuote(configPath)} ${shellQuote(`${TUNNEL_CONTAINER_NAME}:${TUNNEL_CONFIG_CONTAINER_PATH}`)}`,
+      const streamedConfig = await sandbox.exec(
+        streamFileIntoContainerCommand(
+          TUNNEL_CONTAINER_NAME,
+          configPath,
+          TUNNEL_CONFIG_CONTAINER_PATH,
+        ),
         { timeoutSec: 30 },
       );
-      ensureExecSuccess(copiedConfig, 'copy sandbox reverse tunnel config');
+      ensureExecSuccess(streamedConfig, 'stream sandbox reverse tunnel config');
     } finally {
       await this.#removeTunnelFiles(sandbox, record);
     }
@@ -585,6 +592,20 @@ function positiveId(
     throw new Error(`${name} must be a positive integer`);
   }
   return resolved;
+}
+
+function streamFileIntoContainerCommand(
+  containerName: string,
+  sourcePath: string,
+  destinationPath: string,
+): string {
+  const writer = [
+    'umask 077',
+    `cat > ${shellQuote(destinationPath)}`,
+    `chmod 0400 ${shellQuote(destinationPath)}`,
+    `test -s ${shellQuote(destinationPath)}`,
+  ].join('; ');
+  return `cat ${shellQuote(sourcePath)} | docker exec -i ${shellQuote(containerName)} sh -c ${shellQuote(writer)}`;
 }
 
 function shellQuote(value: string): string {
