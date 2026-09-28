@@ -56,7 +56,6 @@ import { I18nKey } from "#/i18n/declaration";
 import { useConversationHistory } from "#/hooks/query/use-conversation-history";
 import { setConversationState } from "#/utils/conversation-local-storage";
 
-// eslint-disable-next-line @typescript-eslint/naming-convention
 export type V1_WebSocketConnectionState =
   | "CONNECTING"
   | "OPEN"
@@ -71,6 +70,9 @@ interface ConversationWebSocketContextType {
   connectionState: V1_WebSocketConnectionState;
   sendMessage: (message: V1SendMessageRequest) => Promise<SendMessageResult>;
   isLoadingHistory: boolean;
+  hasMoreHistory: boolean;
+  isLoadingOlderHistory: boolean;
+  loadOlderHistory: () => void;
 }
 
 const ConversationWebSocketContext = createContext<
@@ -114,9 +116,6 @@ export function ConversationWebSocketProvider({
   const [isLoadingHistoryMain, setIsLoadingHistoryMain] = useState(true);
   const [isLoadingHistoryPlanning, setIsLoadingHistoryPlanning] =
     useState(true);
-  const [expectedEventCountMain, setExpectedEventCountMain] = useState<
-    number | null
-  >(null);
   const [expectedEventCountPlanning, setExpectedEventCountPlanning] = useState<
     number | null
   >(null);
@@ -127,7 +126,6 @@ export function ConversationWebSocketProvider({
   const { mutate: readConversationFile } = useReadConversationFile();
 
   // Separate received event count tracking per connection
-  const receivedEventCountRefMain = useRef(0);
   const receivedEventCountRefPlanning = useRef(0);
 
   // Track the latest PlanningFileEditorObservation for Plan.md during history replay
@@ -189,6 +187,27 @@ export function ConversationWebSocketProvider({
     [],
   );
 
+  // Preload the most recent conversation history via REST (newest-first) and
+  // resume the live stream from the newest preloaded event instead of re-sending
+  // the entire history over the WebSocket.
+  const {
+    data: preloadedEvents,
+    isFetched: isHistoryFetched,
+    hasMore: hasMoreHistory,
+    isFetchingOlder: isLoadingOlderHistory,
+    loadOlder: loadOlderHistory,
+  } = useConversationHistory(conversationId);
+
+  // Timestamp of the most recent preloaded event. The main WebSocket resumes
+  // (resend_mode=since) from this point so history is never resent in full.
+  const afterTimestamp = useMemo(() => {
+    if (!preloadedEvents || preloadedEvents.length === 0) {
+      return null;
+    }
+    const lastEvent = preloadedEvents[preloadedEvents.length - 1];
+    return "timestamp" in lastEvent ? (lastEvent.timestamp as string) : null;
+  }, [preloadedEvents]);
+
   // Build WebSocket URL from props
   // Only build URL if we have both conversationId and conversationUrl
   // This prevents connection attempts during task polling phase
@@ -199,6 +218,29 @@ export function ConversationWebSocketProvider({
     }
     return buildWebSocketUrl(conversationId, conversationUrl);
   }, [conversationId, conversationUrl]);
+
+  // Main WebSocket URL — waits until history has been preloaded, then resumes
+  // from the newest preloaded event so the full history is never resent.
+  const mainWebsocketUrl = useMemo(() => {
+    if (!wsUrl) {
+      return "";
+    }
+    if (!isHistoryFetched) {
+      return "";
+    }
+
+    const params = new URLSearchParams();
+    if (sessionApiKey) {
+      params.set("session_api_key", sessionApiKey);
+    }
+    if (afterTimestamp) {
+      params.set("resend_mode", "since");
+      params.set("after_timestamp", afterTimestamp);
+    }
+
+    const queryString = params.toString();
+    return queryString ? `${wsUrl}?${queryString}` : wsUrl;
+  }, [wsUrl, isHistoryFetched, afterTimestamp, sessionApiKey]);
 
   const planningAgentWsUrl = useMemo(() => {
     if (!subConversations?.length) {
@@ -263,16 +305,6 @@ export function ConversationWebSocketProvider({
 
   useEffect(() => {
     if (
-      expectedEventCountMain !== null &&
-      receivedEventCountRefMain.current >= expectedEventCountMain &&
-      isLoadingHistoryMain
-    ) {
-      setIsLoadingHistoryMain(false);
-    }
-  }, [expectedEventCountMain, isLoadingHistoryMain, receivedEventCountRefMain]);
-
-  useEffect(() => {
-    if (
       expectedEventCountPlanning !== null &&
       receivedEventCountRefPlanning.current >= expectedEventCountPlanning &&
       isLoadingHistoryPlanning
@@ -301,7 +333,6 @@ export function ConversationWebSocketProvider({
             setPlanContent(fileContent);
           },
           onError: (error) => {
-            // eslint-disable-next-line no-console
             console.warn("Failed to read conversation file:", error);
           },
         },
@@ -331,14 +362,9 @@ export function ConversationWebSocketProvider({
   useEffect(() => {
     hasConnectedRefPlanning.current = false;
     setIsLoadingHistoryMain(true);
-    setExpectedEventCountMain(null);
-    receivedEventCountRefMain.current = 0;
     // Reset the tracked event ref when conversation changes
     latestPlanningFileEventRef.current = null;
   }, [conversationId]);
-
-  const { data: preloadedEvents, isFetched: isHistoryFetched } =
-    useConversationHistory(conversationId);
 
   useEffect(() => {
     // Don't do anything until the history query has completed
@@ -366,19 +392,6 @@ export function ConversationWebSocketProvider({
     (messageEvent: MessageEvent) => {
       try {
         const event = JSON.parse(messageEvent.data);
-
-        // Track received events for history loading (count ALL events from WebSocket)
-        // Always count when loading, even if we don't have the expected count yet
-        if (isLoadingHistoryMain) {
-          receivedEventCountRefMain.current += 1;
-
-          if (
-            expectedEventCountMain !== null &&
-            receivedEventCountRefMain.current >= expectedEventCountMain
-          ) {
-            setIsLoadingHistoryMain(false);
-          }
-        }
 
         // Use type guard to validate v1 event structure
         if (isV1Event(event)) {
@@ -531,14 +544,11 @@ export function ConversationWebSocketProvider({
           }
         }
       } catch (error) {
-        // eslint-disable-next-line no-console
         console.warn("Failed to parse WebSocket message as JSON:", error);
       }
     },
     [
       addEvent,
-      isLoadingHistoryMain,
-      expectedEventCountMain,
       setErrorMessage,
       removeErrorMessage,
       removeOptimisticUserMessage,
@@ -695,7 +705,6 @@ export function ConversationWebSocketProvider({
                         setPlanContent(fileContent);
                       },
                       onError: (error) => {
-                        // eslint-disable-next-line no-console
                         console.warn(
                           "Failed to read conversation file:",
                           error,
@@ -709,7 +718,6 @@ export function ConversationWebSocketProvider({
           }
         }
       } catch (error) {
-        // eslint-disable-next-line no-console
         console.warn("Failed to parse WebSocket message as JSON:", error);
       }
     },
@@ -732,44 +740,17 @@ export function ConversationWebSocketProvider({
     ],
   );
 
-  // Separate WebSocket options for main connection
+  // Separate WebSocket options for main connection.
+  // History is preloaded via REST and the connection resumes from the newest
+  // preloaded event (see mainWebsocketUrl), so no resend_all query param or
+  // event-count polling is needed here.
   const mainWebsocketOptions: WebSocketHookOptions = useMemo(() => {
-    const queryParams: Record<string, string | boolean> = {
-      resend_all: true,
-    };
-
-    // Add session_api_key if available
-    if (sessionApiKey) {
-      queryParams.session_api_key = sessionApiKey;
-    }
-
     return {
-      queryParams,
       reconnect: { enabled: true },
-      onOpen: async () => {
+      onOpen: () => {
         setMainConnectionState("OPEN");
         hasConnectedRefMain.current = true; // Mark that we've successfully connected
         removeErrorMessage(); // Clear any previous error messages on successful connection
-
-        // Fetch expected event count for history loading detection
-        if (conversationId && conversationUrl) {
-          try {
-            const count = await EventService.getEventCount(
-              conversationId,
-              conversationUrl,
-              sessionApiKey,
-            );
-            setExpectedEventCountMain(count);
-
-            // If no events expected, mark as loaded immediately
-            if (count === 0) {
-              setIsLoadingHistoryMain(false);
-            }
-          } catch (error) {
-            // Fall back to marking as loaded to avoid infinite loading state
-            setIsLoadingHistoryMain(false);
-          }
-        }
       },
       onClose: () => {
         setMainConnectionState("CLOSED");
@@ -785,14 +766,7 @@ export function ConversationWebSocketProvider({
       },
       onMessage: handleMainMessage,
     };
-  }, [
-    handleMainMessage,
-    setErrorMessage,
-    removeErrorMessage,
-    sessionApiKey,
-    conversationId,
-    conversationUrl,
-  ]);
+  }, [handleMainMessage, setErrorMessage, removeErrorMessage]);
 
   // Separate WebSocket options for planning agent connection
   const planningWebsocketOptions: WebSocketHookOptions = useMemo(() => {
@@ -860,11 +834,11 @@ export function ConversationWebSocketProvider({
     subConversations,
   ]);
 
-  // Only attempt WebSocket connection when we have a valid URL
-  // This prevents connection attempts during task polling phase
-  const websocketUrl = wsUrl;
+  // Only attempt WebSocket connection when history has been preloaded and we
+  // have a valid URL. This prevents connection attempts during the task polling
+  // phase and avoids re-sending the full history over the socket.
   const { socket: mainSocket } = useWebSocket(
-    websocketUrl || "",
+    mainWebsocketUrl,
     mainWebsocketOptions,
   );
 
@@ -981,8 +955,22 @@ export function ConversationWebSocketProvider({
   }, [planningAgentSocket, planningAgentWsUrl]);
 
   const contextValue = useMemo(
-    () => ({ connectionState, sendMessage, isLoadingHistory }),
-    [connectionState, sendMessage, isLoadingHistory],
+    () => ({
+      connectionState,
+      sendMessage,
+      isLoadingHistory,
+      hasMoreHistory,
+      isLoadingOlderHistory,
+      loadOlderHistory,
+    }),
+    [
+      connectionState,
+      sendMessage,
+      isLoadingHistory,
+      hasMoreHistory,
+      isLoadingOlderHistory,
+      loadOlderHistory,
+    ],
   );
 
   return (
