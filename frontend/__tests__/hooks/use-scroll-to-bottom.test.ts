@@ -123,4 +123,73 @@ describe("useScrollToBottom", () => {
       expect(result.current.autoScroll).toBe(true);
     });
   });
+
+  describe("onReachTop callback", () => {
+    it("fires once when scrolling up into the top region", () => {
+      const onReachTop = vi.fn();
+      const { result } = renderHook(() => useScrollToBottom(ref, onReachTop));
+
+      // Start away from the top
+      mock.state.scrollTop = 400;
+      act(() => {
+        result.current.onChatBodyScroll(mock.element);
+      });
+      expect(onReachTop).not.toHaveBeenCalled();
+
+      // Scroll up into the top region (scrollTop <= 20)
+      mock.state.scrollTop = 10;
+      act(() => {
+        result.current.onChatBodyScroll(mock.element);
+      });
+      expect(onReachTop).toHaveBeenCalledTimes(1);
+    });
+
+    it("does not fire repeatedly while parked at the top", () => {
+      const onReachTop = vi.fn();
+      const { result } = renderHook(() => useScrollToBottom(ref, onReachTop));
+
+      // Enter the top region
+      mock.state.scrollTop = 10;
+      act(() => {
+        result.current.onChatBodyScroll(mock.element);
+      });
+
+      // Continue receiving scroll events while still at the top
+      mock.state.scrollTop = 5;
+      act(() => {
+        result.current.onChatBodyScroll(mock.element);
+      });
+      mock.state.scrollTop = 0;
+      act(() => {
+        result.current.onChatBodyScroll(mock.element);
+      });
+
+      expect(onReachTop).toHaveBeenCalledTimes(1);
+    });
+
+    it("fires again after scrolling away from and back to the top", () => {
+      const onReachTop = vi.fn();
+      const { result } = renderHook(() => useScrollToBottom(ref, onReachTop));
+
+      // Reach the top the first time
+      mock.state.scrollTop = 10;
+      act(() => {
+        result.current.onChatBodyScroll(mock.element);
+      });
+
+      // Scroll away from the top (e.g., new content was prepended)
+      mock.state.scrollTop = 300;
+      act(() => {
+        result.current.onChatBodyScroll(mock.element);
+      });
+
+      // Scroll back up to the top
+      mock.state.scrollTop = 10;
+      act(() => {
+        result.current.onChatBodyScroll(mock.element);
+      });
+
+      expect(onReachTop).toHaveBeenCalledTimes(2);
+    });
+  });
 });

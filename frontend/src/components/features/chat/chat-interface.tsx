@@ -56,6 +56,25 @@ export function ChatInterface() {
     useOptimisticUserMessageStore();
   const { t } = useTranslation();
   const scrollRef = React.useRef<HTMLDivElement>(null);
+
+  // Tracks the scrollHeight captured just before loading older messages so we
+  // can restore the user's position after the older messages are prepended.
+  const prevScrollHeightRef = React.useRef<number>(0);
+
+  const handleLoadOlder = React.useCallback(() => {
+    if (
+      !conversationWebSocket ||
+      !conversationWebSocket.hasMoreHistory ||
+      conversationWebSocket.isLoadingOlderHistory
+    ) {
+      return;
+    }
+    if (scrollRef.current) {
+      prevScrollHeightRef.current = scrollRef.current.scrollHeight;
+    }
+    conversationWebSocket.loadOlderHistory();
+  }, [conversationWebSocket]);
+
   const {
     scrollDomToBottom,
     onChatBodyScroll,
@@ -63,7 +82,7 @@ export function ChatInterface() {
     autoScroll,
     setAutoScroll,
     setHitBottom,
-  } = useScrollToBottom(scrollRef);
+  } = useScrollToBottom(scrollRef, handleLoadOlder);
   const {
     mutate: newConversationCommand,
     isPending: isNewConversationPending,
@@ -204,6 +223,20 @@ export function ChatInterface() {
     scrollDomToBottom,
   ]);
 
+  // Preserve the user's scroll position when older messages are prepended to
+  // the top of the list. Runs before paint so there's no visible jump.
+  React.useLayoutEffect(() => {
+    const dom = scrollRef.current;
+    if (!dom || prevScrollHeightRef.current <= 0) {
+      return;
+    }
+    const delta = dom.scrollHeight - prevScrollHeightRef.current;
+    if (delta > 0) {
+      dom.scrollTop += delta;
+    }
+    prevScrollHeightRef.current = 0;
+  }, [v1FullEvents.length]);
+
   // Create a ScrollProvider with the scroll hook values
   const scrollProviderValue = {
     scrollRef,
@@ -269,19 +302,12 @@ export function ChatInterface() {
             </div>
           )}
 
-          {showV1Messages && conversationWebSocket?.hasMoreHistory && (
-            <div className="flex justify-center py-1">
-              <button
-                type="button"
-                data-testid="load-earlier-messages"
-                onClick={() => conversationWebSocket?.loadOlderHistory()}
-                disabled={conversationWebSocket?.isLoadingOlderHistory}
-                className="text-sm text-neutral-400 hover:text-neutral-200 disabled:opacity-50 cursor-pointer disabled:cursor-default"
-              >
-                {conversationWebSocket?.isLoadingOlderHistory
-                  ? "..."
-                  : t(I18nKey.CHAT_INTERFACE$LOAD_EARLIER_MESSAGES)}
-              </button>
+          {showV1Messages && conversationWebSocket?.isLoadingOlderHistory && (
+            <div
+              className="flex justify-center py-2"
+              data-testid="loading-older-messages"
+            >
+              <LoadingSpinner size="small" />
             </div>
           )}
           <ModelMessages
