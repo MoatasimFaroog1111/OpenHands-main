@@ -133,6 +133,9 @@ describe("ChatInterface – message display continuity (spec 3.1)", () => {
         isLoadingHistory: true,
         connectionState: "OPEN",
         sendMessage: vi.fn(),
+        hasMoreHistory: false,
+        isLoadingOlderHistory: false,
+        loadOlderHistory: vi.fn(),
       });
 
       // Put V1 user events in the store
@@ -157,6 +160,9 @@ describe("ChatInterface – message display continuity (spec 3.1)", () => {
         isLoadingHistory: true,
         connectionState: "OPEN",
         sendMessage: vi.fn(),
+        hasMoreHistory: false,
+        isLoadingOlderHistory: false,
+        loadOlderHistory: vi.fn(),
       });
 
       // Store is empty
@@ -177,6 +183,9 @@ describe("ChatInterface – message display continuity (spec 3.1)", () => {
         isLoadingHistory: false,
         connectionState: "OPEN",
         sendMessage: vi.fn(),
+        hasMoreHistory: false,
+        isLoadingOlderHistory: false,
+        loadOlderHistory: vi.fn(),
       });
 
       // V1 events in store

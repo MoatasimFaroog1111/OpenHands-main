@@ -196,7 +196,6 @@ export function ChatInterface() {
     }
     // Note: We intentionally exclude autoScroll from deps because we only want
     // to scroll when message content changes, not when autoScroll state changes.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [
     v1UiEvents.length,
     v0Events.length,
@@ -270,6 +269,21 @@ export function ChatInterface() {
             </div>
           )}
 
+          {showV1Messages && conversationWebSocket?.hasMoreHistory && (
+            <div className="flex justify-center py-1">
+              <button
+                type="button"
+                data-testid="load-earlier-messages"
+                onClick={() => conversationWebSocket?.loadOlderHistory()}
+                disabled={conversationWebSocket?.isLoadingOlderHistory}
+                className="text-sm text-neutral-400 hover:text-neutral-200 disabled:opacity-50 cursor-pointer disabled:cursor-default"
+              >
+                {conversationWebSocket?.isLoadingOlderHistory
+                  ? "..."
+                  : t(I18nKey.CHAT_INTERFACE$LOAD_EARLIER_MESSAGES)}
+              </button>
+            </div>
+          )}
           <ModelMessages
             conversationId={params.conversationId}
             anchorEventId={null}

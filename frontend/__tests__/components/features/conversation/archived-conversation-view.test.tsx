@@ -125,6 +125,9 @@ describe("ArchivedConversationView", () => {
       isLoadingHistory: false,
       connectionState: "OPEN",
       sendMessage: vi.fn(),
+      hasMoreHistory: false,
+      isLoadingOlderHistory: false,
+      loadOlderHistory: vi.fn(),
     });
   });
 
@@ -134,6 +137,9 @@ describe("ArchivedConversationView", () => {
         isLoadingHistory: true,
         connectionState: "OPEN",
         sendMessage: vi.fn(),
+        hasMoreHistory: false,
+        isLoadingOlderHistory: false,
+        loadOlderHistory: vi.fn(),
       });
 
       useEventStore.setState({
@@ -151,6 +157,9 @@ describe("ArchivedConversationView", () => {
         isLoadingHistory: true,
         connectionState: "OPEN",
         sendMessage: vi.fn(),
+        hasMoreHistory: false,
+        isLoadingOlderHistory: false,
+        loadOlderHistory: vi.fn(),
       });
 
       const userEvent = createUserMessageEvent("evt-1");
@@ -183,6 +192,9 @@ describe("ArchivedConversationView", () => {
         isLoadingHistory: false,
         connectionState: "OPEN",
         sendMessage: vi.fn(),
+        hasMoreHistory: false,
+        isLoadingOlderHistory: false,
+        loadOlderHistory: vi.fn(),
       });
 
       useEventStore.setState({

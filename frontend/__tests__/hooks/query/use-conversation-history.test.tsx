@@ -72,7 +72,7 @@ describe("useConversationHistory", () => {
       refetch: vi.fn(),
     } as any);
 
-    v1SearchEventsSpy.mockResolvedValue([makeEvent()]);
+    v1SearchEventsSpy.mockResolvedValue({ items: [makeEvent()], nextPageId: null });
 
     const { result } = renderHook(() => useConversationHistory("conv-123"), {
       wrapper,
@@ -82,7 +82,12 @@ describe("useConversationHistory", () => {
       expect(result.current.data).toBeDefined();
     });
 
-    expect(EventService.searchEventsV1).toHaveBeenCalledWith("conv-123");
+    expect(EventService.searchEventsV1).toHaveBeenCalledWith(
+      "conv-123",
+      100,
+      "TIMESTAMP_DESC",
+      null,
+    );
   });
 });
 
@@ -117,7 +122,7 @@ describe("useConversationHistory cache key stability", () => {
 
   it("does not refetch when conversation object changes but version stays the same", async () => {
     const v1Spy = vi.spyOn(EventService, "searchEventsV1");
-    v1Spy.mockResolvedValue([makeEvent()]);
+    v1Spy.mockResolvedValue({ items: [makeEvent()], nextPageId: null });
 
     const conv1 = makeConversation("V1");
     vi.mocked(useUserConversation).mockReturnValue({
@@ -174,7 +179,7 @@ describe("useConversationHistory cache key stability", () => {
 
   it("treats cached history as never stale (staleTime is Infinity)", async () => {
     const v1Spy = vi.spyOn(EventService, "searchEventsV1");
-    v1Spy.mockResolvedValue([makeEvent()]);
+    v1Spy.mockResolvedValue({ items: [makeEvent()], nextPageId: null });
 
     vi.mocked(useUserConversation).mockReturnValue({
       data: makeConversation("V1"),
@@ -206,7 +211,7 @@ describe("useConversationHistory cache key stability", () => {
 
   it("has gcTime of at least 30 minutes for navigation resilience", async () => {
     const v1Spy = vi.spyOn(EventService, "searchEventsV1");
-    v1Spy.mockResolvedValue([makeEvent()]);
+    v1Spy.mockResolvedValue({ items: [makeEvent()], nextPageId: null });
 
     vi.mocked(useUserConversation).mockReturnValue({
       data: makeConversation("V1"),

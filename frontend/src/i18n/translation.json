@@ -10080,6 +10080,23 @@
     "uk": "Надіслати",
     "ca": "Envia"
   },
+  "CHAT_INTERFACE$LOAD_EARLIER_MESSAGES": {
+    "en": "Load earlier messages",
+    "ar": "تحميل الرسائل السابقة",
+    "ca": "Carrega missatges anteriors",
+    "de": "Frühere Nachrichten laden",
+    "es": "Cargar mensajes anteriores",
+    "fr": "Charger les messages précédents",
+    "it": "Carica i messaggi precedenti",
+    "ja": "以前のメッセージを読み込む",
+    "ko-KR": "이전 메시지 불러오기",
+    "no": "Last inn tidligere meldinger",
+    "pt": "Carregar mensagens anteriores",
+    "tr": "Önceki mesajları yükle",
+    "uk": "Завантажити попередні повідомлення",
+    "zh-CN": "加载更早的消息",
+    "zh-TW": "載入更早的訊息"
+  },
   "CHAT_INTERFACE$CHAT_MESSAGE_COPIED": {
     "en": "Message copied to clipboard",
     "zh-CN": "消息已复制到剪贴板",
