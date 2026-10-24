@@ -7,7 +7,7 @@
     "node": ">=22.12.0"
   },
   "dependencies": {
-    "@heroui/react": "2.8.8",
+    "@heroui/react": "3.2.2",
     "@microlink/react-json-view": "^1.27.1",
     "@monaco-editor/react": "^4.7.0-rc.0",
     "@react-router/node": "^7.15.0",
